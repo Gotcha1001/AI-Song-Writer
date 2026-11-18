@@ -1,9 +1,10 @@
 // app/components/songs/SongForm.tsx
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, Sparkles } from "lucide-react";
+import { GeneratingModal } from "@/app/components/GeneratingModal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -26,7 +27,8 @@ import {
   TIME_SIGNATURES,
   type LengthKey,
 } from "@/convex/lib/songOptions";
-import { useSongActions } from "@/hooks/useSongs";
+import type { Id } from "@/convex/_generated/dataModel";
+import { useSong, useSongActions } from "@/hooks/useSongs";
 import { cn } from "@/lib/utils";
 
 function Tile({
@@ -92,6 +94,9 @@ export function SongForm() {
   const [beatsPerBar, setBeatsPerBar] = useState<3 | 4>(4);
   const [chordStyle, setChordStyle] = useState<"simple" | "rich">("simple");
   const [submitting, setSubmitting] = useState(false);
+  // Set once the song record exists; drives the GeneratingModal.
+  const [songId, setSongId] = useState<Id<"songs"> | null>(null);
+  const song = useSong(songId ?? undefined);
 
   const ready =
     topic.trim().length >= LIMITS.topicMin && mood.trim().length > 0;
@@ -110,9 +115,18 @@ export function SongForm() {
       beatsPerBar,
       chordStyle,
     });
-    if (id) router.push(`/songs/${id}`);
-    else setSubmitting(false);
+    if (id)
+      setSongId(id); // modal opens, we stay on /songs/new
+    else setSubmitting(false); // create() already toasted the error
   };
+
+  // Leave as soon as generation finishes. Failed songs go to the song page
+  // too, where FailedState already offers "Try again".
+  useEffect(() => {
+    if (songId && song && song.status !== "generating") {
+      router.push(`/songs/${songId}`);
+    }
+  }, [song, songId, router]);
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -292,6 +306,14 @@ export function SongForm() {
         {submitting ? <Loader2 className="animate-spin" /> : <Sparkles />}
         {submitting ? "Starting…" : "Write my song"}
       </Button>
+
+      <GeneratingModal
+        open={songId !== null}
+        topic={topic}
+        onDismiss={() => {
+          if (songId) router.push(`/songs/${songId}`);
+        }}
+      />
     </div>
   );
 }
