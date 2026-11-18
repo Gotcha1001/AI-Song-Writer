@@ -157,6 +157,12 @@ export function SongControls(p: SongControlsProps) {
           checked={player.clickOn}
           onChange={player.setClickOn}
         />
+        <Toggle
+          id="snd-drums"
+          label="Drum beat"
+          checked={player.drumsOn}
+          onChange={player.setDrumsOn}
+        />
         <p className="text-xs text-muted-foreground">
           Tap any bar to start from there.
         </p>
