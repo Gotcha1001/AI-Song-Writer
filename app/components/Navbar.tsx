@@ -2,6 +2,7 @@
 
 import { Show, UserButton } from "@clerk/nextjs";
 import Link from "next/link";
+import { Music2 } from "lucide-react";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { ThemeToggle } from "./ThemeToggle";
 
@@ -23,24 +24,23 @@ export default function Navbar() {
 
         <Link
           href="/"
+          aria-label="AI Song Generator home"
           className="group flex items-center gap-2 text-lg font-black uppercase tracking-tight"
         >
-          <span className="text-2xl drop-shadow-[0_0_8px_var(--accent-400)]">
-            🏎️
-          </span>
+          <Music2 className="size-7 text-cyan-300 drop-shadow-[0_0_8px_var(--accent-400)] transition group-hover:scale-110" />
           <span
-            data-text="JONES"
+            data-text="AI SONG"
             className="cyber-glitch cyber-flicker text-cyan-300"
             style={{ textShadow: "0 0 8px currentColor" }}
           >
-            JONES
+            AI SONG
           </span>
           <span
-            data-text="IN THE FAST LANE"
+            data-text="GENERATOR"
             className="cyber-glitch cyber-flicker-slow hidden text-fuchsia-400 sm:inline-block"
             style={{ textShadow: "0 0 8px currentColor" }}
           >
-            IN THE FAST LANE
+            GENERATOR
           </span>
         </Link>
       </div>

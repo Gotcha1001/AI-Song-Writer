@@ -102,9 +102,10 @@ function playHat(ctx: AudioContext, when: number, vol = 0.06): void {
 }
 
 /**
- * One beat of a basic groove, with hi-hats on every 8th note.
+ * One pulse of a basic groove, with hi-hats on every 8th note.
  *   4/4: kick on 1 and 3, snare on 2 and 4
  *   3/4: kick on 1, light snare on 2 and 3 (waltz feel)
+ *   6/8: a pulse is an 8th note; kick on 1, snare on 4, hat on every pulse
  */
 function playDrums(
   ctx: AudioContext,
@@ -113,6 +114,12 @@ function playDrums(
   beatSeconds: number,
 ): void {
   const t = ctx.currentTime;
+  if (beatsPerBar === 6) {
+    if (beat === 0) playKick(ctx, t);
+    else if (beat === 3) playSnare(ctx, t);
+    playHat(ctx, t, beat % 3 === 0 ? 0.08 : 0.05);
+    return;
+  }
   if (beatsPerBar === 3) {
     if (beat === 0) playKick(ctx, t);
     else playSnare(ctx, t, 0.14);
@@ -221,10 +228,14 @@ export function useSongPlayer({
           stop();
           return;
         }
-        const beatMs = 60000 / L.bpm;
+        // In 6/8 the BPM counts dotted-quarters, and each is three 8th-note pulses.
+        const compound = L.beatsPerBar === 6;
+        const beatMs = 60000 / L.bpm / (compound ? 3 : 1);
 
         if (beat === 0) setCurrentIndex(bar);
-        if (L.clickOn) playClick(ctx, beat === 0);
+        // 6/8 clicks on the two main beats only (pulses 1 and 4), not every 8th.
+        if (L.clickOn && (!compound || beat % 3 === 0))
+          playClick(ctx, beat === 0);
         if (L.drumsOn) playDrums(ctx, beat, L.beatsPerBar, beatMs / 1000);
 
         if (L.chordsOn) {

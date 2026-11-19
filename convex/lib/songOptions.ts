@@ -74,10 +74,25 @@ export const KEY_OPTIONS = [
   "Bbm",
 ] as const;
 
+/**
+ * `beats` is the number of pulses per bar (what is stored on the song).
+ * 6 means 6/8: six eighth-note pulses felt as two groups of three.
+ * For 6/8 the tempo (BPM) counts the dotted-quarter, so two beats per bar.
+ */
 export const TIME_SIGNATURES = [
   { beats: 4, label: "4/4" },
   { beats: 3, label: "3/4" },
+  { beats: 6, label: "6/8" },
 ] as const;
+
+export type BeatsPerBar = (typeof TIME_SIGNATURES)[number]["beats"];
+
+export function timeSignatureLabel(beatsPerBar: number): string {
+  return (
+    TIME_SIGNATURES.find((t) => t.beats === beatsPerBar)?.label ??
+    `${beatsPerBar}/4`
+  );
+}
 
 export const LIMITS = {
   topicMin: 3,

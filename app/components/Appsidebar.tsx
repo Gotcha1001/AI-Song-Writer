@@ -1,8 +1,9 @@
 // app/components/Appsidebar.tsx   (replaces the game sidebar)
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import {
   Home,
@@ -12,7 +13,20 @@ import {
   PlusCircle,
   Settings,
   Star,
+  Trash2,
 } from "lucide-react";
+import { toast } from "sonner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import type { Id } from "@/convex/_generated/dataModel";
 import {
   Sidebar,
   SidebarContent,
@@ -21,11 +35,12 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { useSongList } from "@/hooks/useSongs";
+import { useSongActions, useSongList } from "@/hooks/useSongs";
 
 const NAV_ITEMS = [
   { href: "/", label: "Home", icon: Home },
@@ -57,9 +72,29 @@ export function AppSidebar() {
   const { user, isSignedIn } = useUser();
   const pathname = usePathname();
   const { isMobile, setOpenMobile } = useSidebar();
+  const router = useRouter();
   const songs = useSongList();
+  const actions = useSongActions();
+  const [songToDelete, setSongToDelete] = useState<{
+    id: Id<"songs">;
+    title: string;
+  } | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   if (!isSignedIn) return null;
+
+  const confirmDelete = async () => {
+    if (!songToDelete || deleting) return;
+    const { id, title } = songToDelete;
+    setDeleting(true);
+    const ok = await actions.remove(id);
+    setDeleting(false);
+    if (!ok) return; // the hook already toasted the error
+    setSongToDelete(null);
+    toast.success(`Deleted “${title}”`);
+    // Don't leave the user staring at a song that no longer exists.
+    if (pathname === `/songs/${id}`) router.push("/songs");
+  };
 
   const closeOnMobile = () => {
     if (isMobile) setOpenMobile(false);
@@ -146,6 +181,15 @@ export function AppSidebar() {
                     <span className="truncate">{s.title}</span>
                   </Link>
                 </SidebarMenuButton>
+                <SidebarMenuAction
+                  showOnHover
+                  aria-label={`Delete ${s.title}`}
+                  title="Delete song"
+                  className="text-white/50 hover:bg-red-500/15 hover:text-red-400"
+                  onClick={() => setSongToDelete({ id: s._id, title: s.title })}
+                >
+                  <Trash2 />
+                </SidebarMenuAction>
               </SidebarMenuItem>
             ))}
           </SidebarMenu>
@@ -170,6 +214,34 @@ export function AppSidebar() {
           </div>
         )}
       </SidebarFooter>
+
+      <AlertDialog
+        open={songToDelete !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleting) setSongToDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete “{songToDelete?.title}”?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the song and its chord chart for good.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Keep it</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleting}
+              onClick={(e) => {
+                e.preventDefault(); // keep the dialog open until the delete finishes
+                void confirmDelete();
+              }}
+            >
+              {deleting ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Sidebar>
   );
 }

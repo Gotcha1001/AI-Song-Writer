@@ -119,7 +119,7 @@ export const generateSong = internalAction({
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
         const raw = await callModel(apiKey, model, system, user);
-        const parsed = parseSongJson(raw, song.requestedKey ?? "C");
+        const parsed = parseSongJson(raw, song.requestedKey);
 
         await ctx.runMutation(internal.songs.saveGenerated, {
           songId,
