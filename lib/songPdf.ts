@@ -2,6 +2,7 @@
 // Builds a real, selectable-text A4 PDF of the chord chart (no browser print dialog).
 // Needs:  npm i jspdf
 import type { jsPDF } from "jspdf";
+import { timeSignatureLabel } from "@/convex/lib/songOptions";
 import type { SongSection } from "@/lib/songTypes";
 
 export interface SongPdfOptions {
@@ -86,7 +87,7 @@ export async function buildSongPdf(o: SongPdfOptions): Promise<jsPDF> {
   const meta = [
     `Key ${o.key}`,
     `${o.tempo} BPM`,
-    `${o.beatsPerBar}/4`,
+    timeSignatureLabel(o.beatsPerBar),
     o.subtitle,
   ]
     .filter(Boolean)

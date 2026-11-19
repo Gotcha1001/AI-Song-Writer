@@ -2,7 +2,7 @@
 // Builds the prompt and turns the model's raw text into a clean, validated song.
 // The chords are checked against the key, so a song in Bm can never end up
 // with a C major or Bb chord in it.
-import { CHORD_RE, LIMITS } from "./songOptions";
+import { CHORD_RE, LIMITS, timeSignatureLabel } from "./songOptions";
 
 export interface PromptInput {
   topic: string;
@@ -13,7 +13,7 @@ export interface PromptInput {
   targetBars: number;
   requestedKey?: string;
   requestedTempo?: number;
-  beatsPerBar: 3 | 4;
+  beatsPerBar: 3 | 4 | 6; // 6 = 6/8
   chordStyle: "simple" | "rich";
 }
 
@@ -363,6 +363,10 @@ export function buildPrompt(input: PromptInput): {
 } {
   const requested = parseKey(input.requestedKey);
   const rich = input.chordStyle === "rich";
+  const barRule =
+    input.beatsPerBar === 6
+      ? "Every bar is in 6/8 time: six eighth-note pulses felt as two groups of three (ONE-two-three FOUR-five-six), a lilting compound feel. Use 1 or 2 segments per bar, and when a bar has 2 segments the chord change lands on the second group of three (the 4th pulse). Write lyrics with a flowing, rolling rhythm that suits 6/8."
+      : `Every bar has ${input.beatsPerBar} beats and 1 to 4 segments.`;
 
   // The JSON example uses chords that really are in the key (Am: Am, F, C).
   const exKey = requested ?? (parseKey("Am") as KeyInfo);
@@ -404,7 +408,7 @@ JSON shape:
 
 Rules:
 - The song must contain EXACTLY ${input.targetBars} bars in total across all sections. Suggested layout: ${LAYOUTS[input.lengthKey]}.
-- Every bar has ${input.beatsPerBar} beats and 1 to 4 segments.
+- ${barRule}
 - A segment is one chord plus the words sung starting on that chord, until the next segment.
 - The FIRST segment of every bar MUST have a chord (repeat the chord if it does not change). Later segments may use "chord": null when the same chord just continues under more words.
 - Chord symbols use standard names: a letter A to G, an optional # or b, then an optional quality (m, 7, maj7, m7, sus2, sus4, add9, dim), and optionally a slash bass note (e.g. a chord over its third).
@@ -412,7 +416,7 @@ Rules:
 - Lyrics must fit the bar when sung at the tempo: about 4 to 9 syllables per bar. Rhyme lightly, use concrete imagery, avoid cliches, and never copy existing songs.
 - Lyric strings are concatenated when read, so keep the natural spaces: put a trailing space when the next word starts in the next segment. If a chord change lands in the middle of a word, end the first part with a hyphen, e.g. "wan-" then "dering ".
 - Use "lyric": "" for instrumental bars (intro, outro, solos, breathing room).
-- "key" is the tonic as a short string like "G", "F#" or "Em"${requested ? ` and MUST be exactly "${requested.name}"` : ""}. "tempo" is an integer BPM.
+- "key" is the tonic as a short string like "G", "F#" or "Em"${requested ? ` and MUST be exactly "${requested.name}"` : ""}. "tempo" is an integer BPM${input.beatsPerBar === 6 ? " counting dotted-quarter beats (two per 6/8 bar, so typically 50 to 100)" : ""}.
 - The title should be creative, not just the topic repeated.`;
 
   const lines = [
@@ -421,7 +425,7 @@ Rules:
     `Genre / style: ${input.genre}`,
     `Lyrics language: ${input.language}`,
     `Length: ${input.targetBars} bars`,
-    `Time signature: ${input.beatsPerBar}/4`,
+    `Time signature: ${timeSignatureLabel(input.beatsPerBar)}`,
     `Key: ${input.requestedKey ?? "your choice (whatever suits the mood)"}`,
     `Tempo: ${input.requestedTempo ? `${input.requestedTempo} BPM` : "your choice (whatever suits the mood)"}`,
     `Chord style: ${

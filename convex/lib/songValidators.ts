@@ -31,4 +31,8 @@ export const chordStyleValidator = v.union(
   v.literal("rich"),
 );
 
-export const beatsPerBarValidator = v.union(v.literal(3), v.literal(4));
+export const beatsPerBarValidator = v.union(
+  v.literal(3),
+  v.literal(4),
+  v.literal(6), // 6/8
+);

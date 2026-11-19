@@ -25,6 +25,7 @@ import {
   LIMITS,
   MOOD_SUGGESTIONS,
   TIME_SIGNATURES,
+  type BeatsPerBar,
   type LengthKey,
 } from "@/convex/lib/songOptions";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -91,7 +92,7 @@ export function SongForm() {
   const [key, setKey] = useState("auto");
   const [autoTempo, setAutoTempo] = useState(true);
   const [tempo, setTempo] = useState(95);
-  const [beatsPerBar, setBeatsPerBar] = useState<3 | 4>(4);
+  const [beatsPerBar, setBeatsPerBar] = useState<BeatsPerBar>(4);
   const [chordStyle, setChordStyle] = useState<"simple" | "rich">("simple");
   const [submitting, setSubmitting] = useState(false);
   // Set once the song record exists; drives the GeneratingModal.
@@ -243,6 +244,11 @@ export function SongForm() {
               </Tile>
             ))}
           </div>
+          {beatsPerBar === 6 && (
+            <p className="pt-2 text-xs text-muted-foreground">
+              Compound time: two main beats per bar, each split in three.
+            </p>
+          )}
         </Field>
       </div>
 
@@ -271,6 +277,11 @@ export function SongForm() {
               {tempo} BPM
             </span>
           </div>
+        )}
+        {beatsPerBar === 6 && (
+          <p className="pt-2 text-xs text-muted-foreground">
+            In 6/8 the BPM counts the dotted-quarter (two per bar).
+          </p>
         )}
       </Field>
 
