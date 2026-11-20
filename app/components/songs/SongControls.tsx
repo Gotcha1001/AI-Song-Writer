@@ -1,4 +1,5 @@
 // app/components/songs/SongControls.tsx
+
 "use client";
 
 import {
@@ -15,6 +16,7 @@ import {
   Sparkles,
   Mic,
 } from "lucide-react";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,7 +31,7 @@ type Player = ReturnType<typeof useSongPlayer>;
 interface SongControlsProps {
   player: Player;
 
-  /** Transposing */
+  // Transposing
   keyLabel: string;
   steps: number;
   onUp: () => void;
@@ -38,7 +40,7 @@ interface SongControlsProps {
   onSaveTranspose: () => void;
   saving: boolean;
 
-  /** View options */
+  // View options
   barsPerRow: number;
   setBarsPerRow: (n: number) => void;
   textScale: number;
@@ -67,7 +69,7 @@ function Group({
   className?: string;
 }) {
   return (
-    <div className={cn("space-y-2", className)}>
+    <div className={cn("min-w-0 space-y-2", className)}>
       <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
         {title}
       </p>
@@ -103,6 +105,7 @@ export function SongControls(p: SongControlsProps) {
 
   return (
     <div className="grid gap-6 rounded-xl border border-cyan-500/25 bg-card p-4 sm:grid-cols-2 lg:grid-cols-5 print:hidden">
+      {/* PLAY ALONG */}
       <Group title="Play along">
         <div className="flex items-center gap-2">
           <Button
@@ -114,6 +117,7 @@ export function SongControls(p: SongControlsProps) {
             {player.playing ? <Pause /> : <Play />}
             {player.playing ? "Stop" : "Play"}
           </Button>
+
           <Button
             variant={player.loop ? "default" : "outline"}
             size="icon"
@@ -124,10 +128,12 @@ export function SongControls(p: SongControlsProps) {
             <Repeat />
           </Button>
         </div>
+
         <div className="flex items-center gap-2">
           <Label htmlFor="bpm" className="text-sm">
             BPM
           </Label>
+
           <Input
             id="bpm"
             type="number"
@@ -137,6 +143,7 @@ export function SongControls(p: SongControlsProps) {
             value={player.bpm}
             onChange={(e) => {
               const n = Number(e.target.value);
+
               if (Number.isFinite(n)) {
                 player.setBpm(
                   Math.min(
@@ -149,29 +156,34 @@ export function SongControls(p: SongControlsProps) {
             className="w-20 font-mono"
           />
         </div>
+
         <Toggle
           id="snd-chords"
           label="Chord sound"
           checked={player.chordsOn}
           onChange={player.setChordsOn}
         />
+
         <Toggle
           id="snd-click"
           label="Metronome"
           checked={player.clickOn}
           onChange={player.setClickOn}
         />
+
         <Toggle
           id="snd-drums"
           label="Drum beat"
           checked={player.drumsOn}
           onChange={player.setDrumsOn}
         />
+
         <p className="text-xs text-muted-foreground">
           Tap any bar to start from there.
         </p>
       </Group>
 
+      {/* PIANO & VOICE */}
       <Group title="Piano & voice">
         <Toggle
           id="snd-pedal"
@@ -179,9 +191,11 @@ export function SongControls(p: SongControlsProps) {
           checked={player.pedalOn}
           onChange={player.setPedalOn}
         />
+
         <div>
           <p className="mb-1 text-sm">Piano style</p>
-          <div className="flex gap-1">
+
+          <div className="flex flex-wrap gap-1">
             {(
               [
                 ["chords", "Chords"],
@@ -200,18 +214,21 @@ export function SongControls(p: SongControlsProps) {
             ))}
           </div>
         </div>
+
         <Toggle
           id="snd-sing"
           label="Sing the melody"
           checked={player.singOn}
           onChange={player.setSingOn}
         />
+
         <Toggle
           id="snd-speak"
           label="Read lyrics aloud"
           checked={player.speakOn}
           onChange={player.setSpeakOn}
         />
+
         {player.speakOn && (
           <select
             aria-label="Voice"
@@ -220,6 +237,7 @@ export function SongControls(p: SongControlsProps) {
             className="w-full rounded-md border border-input bg-background px-2 py-1 text-sm"
           >
             <option value="">Default voice</option>
+
             {player.voices.map((v) => (
               <option key={v.voiceURI} value={v.voiceURI}>
                 {v.name} ({v.lang})
@@ -227,12 +245,14 @@ export function SongControls(p: SongControlsProps) {
             ))}
           </select>
         )}
+
         <p className="text-xs text-muted-foreground">
           The sung melody is a synth voice. Browsers can&apos;t truly sing, so
           the reading voice speaks the words in time.
         </p>
       </Group>
 
+      {/* TRANSPOSE */}
       <Group title="Transpose">
         <div className="flex items-center gap-2">
           <Button
@@ -243,14 +263,17 @@ export function SongControls(p: SongControlsProps) {
           >
             <Minus />
           </Button>
+
           <div className="min-w-16 text-center">
             <p className="font-mono text-xl font-black leading-none">
               {p.keyLabel}
             </p>
+
             <p className="font-mono text-xs text-muted-foreground">
               {p.steps > 0 ? `+${p.steps}` : p.steps}
             </p>
           </div>
+
           <Button
             variant="outline"
             size="icon"
@@ -260,16 +283,19 @@ export function SongControls(p: SongControlsProps) {
             <Plus />
           </Button>
         </div>
+
         {transposed && (
           <div className="flex flex-wrap gap-2">
             <Button size="xs" onClick={p.onSaveTranspose} disabled={p.saving}>
               <Save /> Save in this key
             </Button>
+
             <Button size="xs" variant="ghost" onClick={p.onResetTranspose}>
               <RotateCcw /> Reset
             </Button>
           </div>
         )}
+
         {transposed && (
           <p className="text-xs text-muted-foreground">
             Save or reset to edit bars again.
@@ -277,40 +303,53 @@ export function SongControls(p: SongControlsProps) {
         )}
       </Group>
 
+      {/* VIEW */}
       <Group title="View">
-        <div className="flex gap-1">
+        {/* View buttons stacked vertically */}
+        <div className="flex w-full flex-col gap-2">
           <Button
-            size="xs"
+            type="button"
+            size="sm"
+            className="w-full justify-start"
             variant={p.view === "chart" ? "default" : "outline"}
             aria-pressed={p.view === "chart"}
             onClick={() => p.setView("chart")}
           >
-            <Music /> Chord chart
+            <Music className="mr-2 h-4 w-4" />
+            Chord Chart
           </Button>
+
           <Button
-            size="xs"
+            type="button"
+            size="sm"
+            className="w-full justify-start"
             variant={p.view === "melody" ? "default" : "outline"}
             aria-pressed={p.view === "melody"}
             onClick={() => p.setView("melody")}
           >
-            <Mic /> Melody sheet
+            <Mic className="mr-2 h-4 w-4" />
+            Melody Sheet
           </Button>
         </div>
+
         <Toggle
           id="v-chords"
           label="Chords"
           checked={p.showChords}
           onChange={p.setShowChords}
         />
+
         <Toggle
           id="v-lyrics"
           label="Lyrics"
           checked={p.showLyrics}
           onChange={p.setShowLyrics}
         />
+
         <div>
           <p className="mb-1 text-sm">Bars per row</p>
-          <div className="flex gap-1">
+
+          <div className="flex flex-wrap gap-1">
             {[1, 2, 3, 4].map((n) => (
               <Button
                 key={n}
@@ -324,8 +363,10 @@ export function SongControls(p: SongControlsProps) {
             ))}
           </div>
         </div>
+
         <div>
           <p className="mb-2 text-sm">Text size</p>
+
           <Slider
             value={[p.textScale]}
             min={0.8}
@@ -337,14 +378,18 @@ export function SongControls(p: SongControlsProps) {
         </div>
       </Group>
 
+      {/* SONG */}
       <Group title="Song">
         <div className="flex flex-col items-start gap-2">
           <Button size="sm" onClick={p.onDownloadPdf} disabled={p.pdfBusy}>
-            <FileDown /> {p.pdfBusy ? "Making PDF…" : "Download PDF"}
+            <FileDown />
+            {p.pdfBusy ? "Making PDF…" : "Download PDF"}
           </Button>
+
           <Button variant="outline" size="sm" onClick={p.onCopy}>
             <Copy /> Copy as text
           </Button>
+
           <Button
             variant="secondary"
             size="sm"
