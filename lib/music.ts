@@ -75,19 +75,30 @@ export function transposeSections(
 
 /* ------------------------------ chord playback ------------------------------ */
 
-/** Frequencies (Hz) for a simple pad voicing of the chord, bass note first. */
-export function chordFrequencies(chord: string): number[] {
+export interface ChordTones {
+  /** Pitch class (0-11) of the root. */
+  root: number;
+  /** Pitch class of the bass note (the slash note, or the root). */
+  bass: number;
+  /** Semitone intervals above the root, e.g. [0, 4, 7, 10]. */
+  intervals: number[];
+  /** The same notes as absolute pitch classes (0-11). */
+  pcs: number[];
+}
+
+/** Break a chord symbol into its notes. Returns null if it can't be read. */
+export function chordTones(chord: string): ChordTones | null {
   const m = CHORD_PARTS.exec(chord);
-  if (!m) return [];
+  if (!m) return null;
   const [, letter, acc, suffix, bassLetter, bassAcc] = m;
-  const pc = pitchClass(letter, acc);
+  const root = pitchClass(letter, acc);
 
   let third = 4;
   let fifth = 7;
   const extra: number[] = [];
 
   if (/^(m(?!aj)|min|-)/.test(suffix)) third = 3;
-  if (/dim|°/.test(suffix)) {
+  if (/dim|°|ø|b5/.test(suffix)) {
     third = 3;
     fifth = 6;
   }
@@ -98,21 +109,93 @@ export function chordFrequencies(chord: string): number[] {
   else if (/dim.*7/.test(suffix)) extra.push(9);
   else if (/7/.test(suffix)) extra.push(10);
   if (/9/.test(suffix)) extra.push(14);
+  if (/6/.test(suffix) && !/6[0-9]/.test(suffix)) extra.push(9);
 
-  // Keep every chord in a comfortable register around C3–B3.
-  const base = 48 + pc - (pc > 6 ? 12 : 0);
-  const bassMidi = bassLetter
-    ? 36 + pitchClass(bassLetter, bassAcc)
-    : base - 12;
+  const intervals = [0, third, fifth, ...extra];
+  return {
+    root,
+    bass: bassLetter ? pitchClass(bassLetter, bassAcc) : root,
+    intervals,
+    pcs: intervals.map((i) => (root + i) % 12),
+  };
+}
 
-  const midi = [
-    bassMidi,
-    base,
-    base + third,
-    base + fifth,
-    ...extra.map((e) => base + e),
-  ];
-  return midi.map((n) => 440 * Math.pow(2, (n - 69) / 12));
+const midiToHz = (n: number) => 440 * Math.pow(2, (n - 69) / 12);
+export { midiToHz };
+
+/** Frequencies (Hz) for a simple pad voicing of the chord, bass note first. */
+export function chordFrequencies(chord: string): number[] {
+  const t = chordTones(chord);
+  if (!t) return [];
+  // Keep every chord in a comfortable register around C3-B3.
+  const base = 48 + t.root - (t.root > 6 ? 12 : 0);
+  const bassMidi = t.bass !== t.root ? 36 + t.bass : base - 12;
+  return [bassMidi, ...t.intervals.map((i) => base + i)].map(midiToHz);
+}
+
+export interface PianoVoicing {
+  /** Left hand: one or two low notes (MIDI). */
+  bass: number[];
+  /** Right hand: the chord, spread low to high (MIDI). */
+  hand: number[];
+}
+
+/**
+ * Pick a piano voicing for the chord that moves as little as possible from the
+ * previous one (voice leading), so a progression sounds smooth instead of
+ * jumping an octave on every change.
+ */
+export function voiceChord(
+  chord: string,
+  prev: number[] | null,
+): PianoVoicing | null {
+  const t = chordTones(chord);
+  if (!t) return null;
+
+  // Thin out the chord for the right hand: drop the 5th of extended chords.
+  let pcs = t.pcs;
+  if (pcs.length >= 5) pcs = pcs.filter((_, i) => i !== 2);
+  // The bass note carries the root, so the hand may leave it out of 4+ note chords.
+  const LOW = 55; // G3
+  const HIGH = 77; // F5
+
+  let best: number[] = [];
+  let bestScore = Infinity;
+  for (let rot = 0; rot < pcs.length; rot++) {
+    const order = [...pcs.slice(rot), ...pcs.slice(0, rot)];
+    for (let start = LOW; start < LOW + 12; start++) {
+      // Lowest note: the first chord note at or above `start`.
+      const notes: number[] = [];
+      let cur = start + ((((order[0] - start) % 12) + 12) % 12);
+      notes.push(cur);
+      for (let i = 1; i < order.length; i++) {
+        let n = cur + ((((order[i] - cur) % 12) + 12) % 12);
+        if (n === cur) n += 12;
+        notes.push(n);
+        cur = n;
+      }
+      const span = notes[notes.length - 1] - notes[0];
+      if (span > 16 || notes[notes.length - 1] > HIGH) continue;
+      let score = span * 0.15;
+      if (prev && prev.length) {
+        const c = notes.reduce((a, b) => a + b, 0) / notes.length;
+        const pc = prev.reduce((a, b) => a + b, 0) / prev.length;
+        score += Math.abs(c - pc) * 1.2;
+      } else {
+        const c = notes.reduce((a, b) => a + b, 0) / notes.length;
+        score += Math.abs(c - 64); // start around E4
+      }
+      if (score < bestScore) {
+        bestScore = score;
+        best = notes;
+      }
+    }
+  }
+  if (!best.length) return null;
+
+  // Left hand: the bass note in the octave E1-D#2 .. and an octave above it.
+  const bassMidi = 36 + ((((t.bass - 36) % 12) + 12) % 12); // C2..B2
+  return { bass: [bassMidi, bassMidi + 12], hand: best };
 }
 
 /* -------------------------------- text export -------------------------------- */

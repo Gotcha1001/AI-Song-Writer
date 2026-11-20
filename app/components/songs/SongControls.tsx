@@ -5,6 +5,7 @@ import {
   Copy,
   FileDown,
   Minus,
+  Music,
   Pause,
   Play,
   Plus,
@@ -12,6 +13,7 @@ import {
   RotateCcw,
   Save,
   Sparkles,
+  Mic,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,6 +47,8 @@ interface SongControlsProps {
   setShowChords: (b: boolean) => void;
   showLyrics: boolean;
   setShowLyrics: (b: boolean) => void;
+  view: "chart" | "melody";
+  setView: (v: "chart" | "melody") => void;
 
   onCopy: () => void;
   onDownloadPdf: () => void;
@@ -98,7 +102,7 @@ export function SongControls(p: SongControlsProps) {
   const transposed = p.steps !== 0;
 
   return (
-    <div className="grid gap-6 rounded-xl border border-cyan-500/25 bg-card p-4 sm:grid-cols-2 lg:grid-cols-4 print:hidden">
+    <div className="grid gap-6 rounded-xl border border-cyan-500/25 bg-card p-4 sm:grid-cols-2 lg:grid-cols-5 print:hidden">
       <Group title="Play along">
         <div className="flex items-center gap-2">
           <Button
@@ -168,6 +172,67 @@ export function SongControls(p: SongControlsProps) {
         </p>
       </Group>
 
+      <Group title="Piano & voice">
+        <Toggle
+          id="snd-pedal"
+          label="Sustain pedal"
+          checked={player.pedalOn}
+          onChange={player.setPedalOn}
+        />
+        <div>
+          <p className="mb-1 text-sm">Piano style</p>
+          <div className="flex gap-1">
+            {(
+              [
+                ["chords", "Chords"],
+                ["arpeggio", "Arpeggio"],
+              ] as const
+            ).map(([k, label]) => (
+              <Button
+                key={k}
+                size="xs"
+                variant={player.pianoStyle === k ? "default" : "outline"}
+                aria-pressed={player.pianoStyle === k}
+                onClick={() => player.setPianoStyle(k)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+        </div>
+        <Toggle
+          id="snd-sing"
+          label="Sing the melody"
+          checked={player.singOn}
+          onChange={player.setSingOn}
+        />
+        <Toggle
+          id="snd-speak"
+          label="Read lyrics aloud"
+          checked={player.speakOn}
+          onChange={player.setSpeakOn}
+        />
+        {player.speakOn && (
+          <select
+            aria-label="Voice"
+            value={player.voiceURI}
+            onChange={(e) => player.setVoiceURI(e.target.value)}
+            className="w-full rounded-md border border-input bg-background px-2 py-1 text-sm"
+          >
+            <option value="">Default voice</option>
+            {player.voices.map((v) => (
+              <option key={v.voiceURI} value={v.voiceURI}>
+                {v.name} ({v.lang})
+              </option>
+            ))}
+          </select>
+        )}
+        <p className="text-xs text-muted-foreground">
+          The sung melody is a synth voice. Browsers can&apos;t truly sing, so
+          the reading voice speaks the words in time.
+        </p>
+      </Group>
+
       <Group title="Transpose">
         <div className="flex items-center gap-2">
           <Button
@@ -213,6 +278,24 @@ export function SongControls(p: SongControlsProps) {
       </Group>
 
       <Group title="View">
+        <div className="flex gap-1">
+          <Button
+            size="xs"
+            variant={p.view === "chart" ? "default" : "outline"}
+            aria-pressed={p.view === "chart"}
+            onClick={() => p.setView("chart")}
+          >
+            <Music /> Chord chart
+          </Button>
+          <Button
+            size="xs"
+            variant={p.view === "melody" ? "default" : "outline"}
+            aria-pressed={p.view === "melody"}
+            onClick={() => p.setView("melody")}
+          >
+            <Mic /> Melody sheet
+          </Button>
+        </div>
         <Toggle
           id="v-chords"
           label="Chords"
