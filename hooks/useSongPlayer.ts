@@ -2,7 +2,17 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { chordFrequencies } from "@/lib/music";
+import {
+  click,
+  createSession,
+  drums,
+  pianoNote,
+  vowelFor,
+  voiceNote,
+  type Session,
+} from "@/lib/audioEngine";
+import { barSyllables, degreeToMidi, type Melody } from "@/lib/melody";
+import { voiceChord } from "@/lib/music";
 import type { SongBar, SongSection } from "@/lib/songTypes";
 
 export interface FlatBar {
@@ -17,153 +27,45 @@ export function flattenBars(sections: SongSection[]): FlatBar[] {
   );
 }
 
-function playClick(ctx: AudioContext, accent: boolean): void {
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.type = "square";
-  osc.frequency.value = accent ? 1500 : 1000;
-  const t = ctx.currentTime;
-  gain.gain.setValueAtTime(0.06, t);
-  gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
-  osc.connect(gain).connect(ctx.destination);
-  osc.start(t);
-  osc.stop(t + 0.06);
-}
+export type PianoStyle = "chords" | "arpeggio";
 
-/* ---- simple synthesized drum kit (no sample files needed) --------------- */
-const noiseCache = new WeakMap<AudioContext, AudioBuffer>();
-
-function noiseBuffer(ctx: AudioContext): AudioBuffer {
-  let buf = noiseCache.get(ctx);
-  if (!buf) {
-    buf = ctx.createBuffer(
-      1,
-      Math.floor(ctx.sampleRate * 0.25),
-      ctx.sampleRate,
-    );
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
-    noiseCache.set(ctx, buf);
-  }
-  return buf;
-}
-
-function playKick(ctx: AudioContext, when: number, vol = 0.45): void {
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.type = "sine";
-  osc.frequency.setValueAtTime(150, when);
-  osc.frequency.exponentialRampToValueAtTime(42, when + 0.12);
-  gain.gain.setValueAtTime(vol, when);
-  gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.25);
-  osc.connect(gain).connect(ctx.destination);
-  osc.start(when);
-  osc.stop(when + 0.28);
-}
-
-function playSnare(ctx: AudioContext, when: number, vol = 0.22): void {
-  const noise = ctx.createBufferSource();
-  noise.buffer = noiseBuffer(ctx);
-  const hp = ctx.createBiquadFilter();
-  hp.type = "highpass";
-  hp.frequency.value = 1500;
-  const nGain = ctx.createGain();
-  nGain.gain.setValueAtTime(vol, when);
-  nGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.16);
-  noise.connect(hp).connect(nGain).connect(ctx.destination);
-  noise.start(when);
-  noise.stop(when + 0.18);
-
-  // a short tonal "body" under the noise
-  const osc = ctx.createOscillator();
-  const oGain = ctx.createGain();
-  osc.type = "triangle";
-  osc.frequency.setValueAtTime(190, when);
-  osc.frequency.exponentialRampToValueAtTime(120, when + 0.08);
-  oGain.gain.setValueAtTime(vol * 0.6, when);
-  oGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.1);
-  osc.connect(oGain).connect(ctx.destination);
-  osc.start(when);
-  osc.stop(when + 0.12);
-}
-
-function playHat(ctx: AudioContext, when: number, vol = 0.06): void {
-  const noise = ctx.createBufferSource();
-  noise.buffer = noiseBuffer(ctx);
-  const hp = ctx.createBiquadFilter();
-  hp.type = "highpass";
-  hp.frequency.value = 7000;
-  const gain = ctx.createGain();
-  gain.gain.setValueAtTime(vol, when);
-  gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.05);
-  noise.connect(hp).connect(gain).connect(ctx.destination);
-  noise.start(when);
-  noise.stop(when + 0.06);
-}
-
-/**
- * One pulse of a basic groove, with hi-hats on every 8th note.
- *   4/4: kick on 1 and 3, snare on 2 and 4
- *   3/4: kick on 1, light snare on 2 and 3 (waltz feel)
- *   6/8: a pulse is an 8th note; kick on 1, snare on 4, hat on every pulse
- */
-function playDrums(
-  ctx: AudioContext,
-  beat: number,
-  beatsPerBar: number,
-  beatSeconds: number,
-): void {
-  const t = ctx.currentTime;
-  if (beatsPerBar === 6) {
-    if (beat === 0) playKick(ctx, t);
-    else if (beat === 3) playSnare(ctx, t);
-    playHat(ctx, t, beat % 3 === 0 ? 0.08 : 0.05);
-    return;
-  }
-  if (beatsPerBar === 3) {
-    if (beat === 0) playKick(ctx, t);
-    else playSnare(ctx, t, 0.14);
-  } else if (beat % 2 === 0) {
-    playKick(ctx, t);
-  } else {
-    playSnare(ctx, t);
-  }
-  playHat(ctx, t, beat === 0 ? 0.08 : 0.06); // on the beat
-  playHat(ctx, t + beatSeconds / 2, 0.04); // the "and"
-}
-
-function playChord(ctx: AudioContext, chord: string, seconds: number): void {
-  const freqs = chordFrequencies(chord);
-  const t = ctx.currentTime;
-  const dur = Math.min(2.5, Math.max(0.4, seconds));
-  for (const f of freqs) {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = "triangle";
-    osc.frequency.value = f;
-    gain.gain.setValueAtTime(0.0001, t);
-    gain.gain.exponentialRampToValueAtTime(0.07, t + 0.03);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(t);
-    osc.stop(t + dur + 0.05);
-  }
+/** The words of a bar as plain text for the speech voice ("wan-" + "dering" -> "wandering"). */
+function barText(bar: SongBar): string {
+  return bar.segments
+    .map((s) => s.lyric)
+    .join("")
+    .replace(/-\s*/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 interface Options {
   sections: SongSection[];
   defaultTempo: number;
   beatsPerBar: number;
+  /** The tune that goes with `sections` (same bars, same key). */
+  melody: Melody | null;
 }
 
+interface Queued {
+  time: number;
+  bar: number;
+  beat: number;
+}
+
+const LOOKAHEAD = 0.15; // seconds scheduled ahead
+const TICK_MS = 25;
+
 /**
- * Play-along: a metronome, optional drum beat, optional chord pad, and a moving highlight
- * (`currentIndex` = flat bar number across all sections).
+ * Play-along: piano chords (with sustain pedal), optional metronome, drums,
+ * a sung melody and a voice that reads the lyrics in time, plus a moving
+ * highlight (`currentIndex` = flat bar number across all sections).
  */
 export function useSongPlayer({
   sections,
   defaultTempo,
   beatsPerBar,
+  melody,
 }: Options) {
   const flat = useMemo(() => flattenBars(sections), [sections]);
 
@@ -171,15 +73,21 @@ export function useSongPlayer({
   const [currentIndex, setCurrentIndex] = useState<number | null>(null);
   const [bpmOverride, setBpmOverride] = useState<number | null>(null);
   const [chordsOn, setChordsOn] = useState(true);
-  const [clickOn, setClickOn] = useState(true);
+  const [clickOn, setClickOn] = useState(false);
   const [drumsOn, setDrumsOn] = useState(false);
   const [loop, setLoop] = useState(false);
+  const [pedalOn, setPedalOn] = useState(true);
+  const [pianoStyle, setPianoStyle] = useState<PianoStyle>("chords");
+  const [singOn, setSingOn] = useState(false);
+  const [speakOn, setSpeakOn] = useState(false);
+  const [voiceURI, setVoiceURI] = useState<string>("");
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
 
   const bpm = bpmOverride ?? defaultTempo;
 
   const audioRef = useRef<AudioContext | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const posRef = useRef({ bar: 0, beat: 0 });
+  const sessionRef = useRef<Session | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const live = useRef({
     flat,
     bpm,
@@ -188,9 +96,15 @@ export function useSongPlayer({
     drumsOn,
     loop,
     beatsPerBar,
+    pedalOn,
+    pianoStyle,
+    singOn,
+    speakOn,
+    voiceURI,
+    melody,
   });
 
-  // Keep the running metronome in sync with the latest settings.
+  // Keep the running scheduler in sync with the latest settings.
   useEffect(() => {
     live.current = {
       flat,
@@ -200,87 +114,278 @@ export function useSongPlayer({
       drumsOn,
       loop,
       beatsPerBar,
+      pedalOn,
+      pianoStyle,
+      singOn,
+      speakOn,
+      voiceURI,
+      melody,
     };
-  }, [flat, bpm, chordsOn, clickOn, drumsOn, loop, beatsPerBar]);
+  }, [
+    flat,
+    bpm,
+    chordsOn,
+    clickOn,
+    drumsOn,
+    loop,
+    beatsPerBar,
+    pedalOn,
+    pianoStyle,
+    singOn,
+    speakOn,
+    voiceURI,
+    melody,
+  ]);
+
+  // Browser voices load asynchronously.
+  useEffect(() => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    const load = () => setVoices(window.speechSynthesis.getVoices());
+    load();
+    window.speechSynthesis.addEventListener("voiceschanged", load);
+    return () =>
+      window.speechSynthesis.removeEventListener("voiceschanged", load);
+  }, []);
+
+  useEffect(() => {
+    if (
+      !speakOn &&
+      typeof window !== "undefined" &&
+      "speechSynthesis" in window
+    )
+      window.speechSynthesis.cancel();
+  }, [speakOn]);
+
+  const clearTimer = () => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = null;
+  };
 
   const stop = useCallback(() => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = null;
+    clearTimer();
+    sessionRef.current?.stop(0.12);
+    sessionRef.current = null;
+    if (typeof window !== "undefined" && "speechSynthesis" in window)
+      window.speechSynthesis.cancel();
     setPlaying(false);
     setCurrentIndex(null);
   }, []);
 
+  const speak = useCallback((text: string, rate: number) => {
+    if (
+      !text ||
+      typeof window === "undefined" ||
+      !("speechSynthesis" in window)
+    )
+      return;
+    const synth = window.speechSynthesis;
+    synth.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    const wanted = live.current.voiceURI;
+    const v = synth.getVoices().find((x) => x.voiceURI === wanted);
+    if (v) {
+      u.voice = v;
+      u.lang = v.lang;
+    }
+    u.rate = Math.min(2, Math.max(0.6, rate));
+    u.pitch = 1;
+    synth.speak(u);
+  }, []);
+
   const playFrom = useCallback(
     (startBar = 0) => {
-      if (timerRef.current) clearTimeout(timerRef.current);
+      clearTimer();
+      sessionRef.current?.stop(0.08);
+
       const ctx = audioRef.current ?? new AudioContext();
       audioRef.current = ctx;
       void ctx.resume();
+      const session = createSession(ctx);
+      sessionRef.current = session;
 
-      posRef.current = { bar: startBar, beat: 0 };
+      const pos = { bar: startBar, beat: 0, time: ctx.currentTime + 0.1 };
+      let endTime: number | null = null;
+      let voicing: number[] | null = null; // last right-hand voicing (voice leading)
+      let arpStep = 0;
+      const queue: Queued[] = [];
       setPlaying(true);
 
-      const step = () => {
+      /** Schedule every sound that belongs to one beat. */
+      const scheduleBeat = (bar: number, beat: number, when: number) => {
         const L = live.current;
-        const { bar, beat } = posRef.current;
         const item = L.flat[bar];
-        if (!item) {
-          stop();
-          return;
-        }
-        // In 6/8 the BPM counts dotted-quarters, and each is three 8th-note pulses.
-        const compound = L.beatsPerBar === 6;
-        const beatMs = 60000 / L.bpm / (compound ? 3 : 1);
+        if (!item) return;
+        const compound = L.beatsPerBar === 6; // BPM counts dotted quarters
+        const beatSec = 60 / L.bpm / (compound ? 3 : 1);
 
-        if (beat === 0) setCurrentIndex(bar);
         // 6/8 clicks on the two main beats only (pulses 1 and 4), not every 8th.
         if (L.clickOn && (!compound || beat % 3 === 0))
-          playClick(ctx, beat === 0);
-        if (L.drumsOn) playDrums(ctx, beat, L.beatsPerBar, beatMs / 1000);
+          click(session, when, beat === 0);
+        if (L.drumsOn) drums(session, when, beat, L.beatsPerBar, beatSec);
 
+        /* ---- piano ---- */
         if (L.chordsOn) {
           const segs = item.bar.segments;
-          segs.forEach((seg, i) => {
-            const startBeat = Math.floor((i * L.beatsPerBar) / segs.length);
-            if (startBeat !== beat || !seg.chord) return;
+          const starts = segs.map((_, i) =>
+            Math.floor((i * L.beatsPerBar) / segs.length),
+          );
+          // the chord that is sounding on this beat
+          let active = -1;
+          for (let i = 0; i < segs.length; i++) {
+            if (starts[i] <= beat && segs[i].chord) active = i;
+          }
+          // a chord with no symbol of its own (shouldn't happen) rings on silently
+          if (active >= 0) {
+            const seg = segs[active];
             const nextStart =
-              i + 1 < segs.length
-                ? Math.floor(((i + 1) * L.beatsPerBar) / segs.length)
-                : L.beatsPerBar;
-            playChord(
-              ctx,
-              seg.chord,
-              ((nextStart - startBeat) * beatMs) / 1000,
-            );
-          });
-        }
+              active + 1 < segs.length ? starts[active + 1] : L.beatsPerBar;
+            const startsHere = starts[active] === beat;
+            const remaining = (nextStart - beat) * beatSec;
+            const lift = L.pedalOn ? 0.12 : -0.04; // pedal overlaps into the next chord
 
-        let nextBeat = beat + 1;
-        let nextBar = bar;
-        if (nextBeat >= L.beatsPerBar) {
-          nextBeat = 0;
-          nextBar += 1;
-        }
-        if (nextBar >= L.flat.length) {
-          if (L.loop) {
-            nextBar = 0;
-          } else {
-            timerRef.current = setTimeout(stop, beatMs);
-            return;
+            if (startsHere && seg.chord) {
+              const v = voiceChord(seg.chord, voicing);
+              if (v) {
+                voicing = v.hand;
+                const hold = remaining + lift;
+                // left hand: bass + octave
+                pianoNote(session, v.bass[0], when, {
+                  hold,
+                  velocity: 0.72,
+                  pedal: L.pedalOn,
+                });
+                pianoNote(session, v.bass[1], when + 0.004, {
+                  hold,
+                  velocity: 0.42,
+                  pedal: L.pedalOn,
+                });
+                if (L.pianoStyle === "chords") {
+                  // right hand rolled a touch, like a hand actually playing
+                  v.hand.forEach((m, i) =>
+                    pianoNote(session, m, when + 0.006 + i * 0.016, {
+                      hold,
+                      velocity: 0.5 + (i === v.hand.length - 1 ? 0.08 : 0),
+                      pedal: L.pedalOn,
+                    }),
+                  );
+                  arpStep = 0;
+                }
+              }
+            }
+
+            if (L.pianoStyle === "arpeggio" && voicing) {
+              // one note per beat (two per beat outside 6/8), up and back down
+              const hand = voicing;
+              const order = [0, 1, 2, hand.length > 3 ? 3 : 1, 2, 1];
+              const subs = compound ? 1 : 2;
+              for (let s = 0; s < subs; s++) {
+                const idx = order[arpStep % order.length] % hand.length;
+                arpStep++;
+                pianoNote(session, hand[idx], when + s * (beatSec / 2), {
+                  hold: Math.max(0.3, remaining - s * (beatSec / 2)) + lift,
+                  velocity: s === 0 ? 0.55 : 0.42,
+                  pedal: L.pedalOn,
+                });
+              }
+            }
           }
         }
-        posRef.current = { bar: nextBar, beat: nextBeat };
-        timerRef.current = setTimeout(step, beatMs);
+
+        /* ---- sung melody ---- */
+        const m = L.melody?.bars[bar];
+        if (L.singOn && m && L.melody) {
+          const pulse = compound ? 2 : 4; // sixteenths per scheduler beat
+          const from = beat * pulse;
+          const to = from + pulse;
+          for (const n of m.notes) {
+            if (n.deg === null || n.u < from || n.u >= to) continue;
+            const at = when + ((n.u - from) / pulse) * beatSec;
+            const len = (n.d / pulse) * beatSec * 0.94;
+            voiceNote(
+              session,
+              degreeToMidi(L.melody.key, n.deg),
+              at,
+              len,
+              vowelFor(n.text),
+              0.85,
+            );
+          }
+        }
       };
 
-      step();
+      /** Things that touch the page (highlight, speech) happen on time, not ahead of time. */
+      const drain = () => {
+        const now = ctx.currentTime;
+        while (queue.length && queue[0].time <= now + 0.01) {
+          const q = queue.shift() as Queued;
+          const L = live.current;
+          if (q.beat === 0) {
+            setCurrentIndex(q.bar);
+            if (L.speakOn) {
+              const item = L.flat[q.bar];
+              if (item) {
+                const text = barText(item.bar);
+                const syl = barSyllables(item.bar.segments).length;
+                const compound = L.beatsPerBar === 6;
+                const barSec =
+                  (60 / L.bpm / (compound ? 3 : 1)) * L.beatsPerBar;
+                speak(text, syl / (barSec * 4));
+              }
+            }
+          }
+        }
+        if (endTime !== null && now >= endTime && queue.length === 0) {
+          clearTimer();
+          session.stop(2.5); // let the last chord ring out
+          sessionRef.current = null;
+          setPlaying(false);
+          setCurrentIndex(null);
+        }
+      };
+
+      const tick = () => {
+        const L = live.current;
+        if (endTime === null) {
+          while (pos.time < ctx.currentTime + LOOKAHEAD) {
+            const item = L.flat[pos.bar];
+            if (!item) {
+              endTime = pos.time;
+              break;
+            }
+            const compound = L.beatsPerBar === 6;
+            const beatSec = 60 / L.bpm / (compound ? 3 : 1);
+            scheduleBeat(pos.bar, pos.beat, pos.time);
+            queue.push({ time: pos.time, bar: pos.bar, beat: pos.beat });
+
+            pos.time += beatSec;
+            pos.beat += 1;
+            if (pos.beat >= L.beatsPerBar) {
+              pos.beat = 0;
+              pos.bar += 1;
+              if (pos.bar >= L.flat.length) {
+                if (L.loop) pos.bar = 0;
+                else {
+                  endTime = pos.time;
+                  break;
+                }
+              }
+            }
+          }
+        }
+        drain();
+      };
+
+      tick();
+      timerRef.current = setInterval(tick, TICK_MS);
     },
-    [stop],
+    [speak],
   );
 
   useEffect(
     () => () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
+      clearTimer();
+      if (typeof window !== "undefined" && "speechSynthesis" in window)
+        window.speechSynthesis.cancel();
       void audioRef.current?.close();
     },
     [],
@@ -299,6 +404,17 @@ export function useSongPlayer({
     setDrumsOn,
     loop,
     setLoop,
+    pedalOn,
+    setPedalOn,
+    pianoStyle,
+    setPianoStyle,
+    singOn,
+    setSingOn,
+    speakOn,
+    setSpeakOn,
+    voices,
+    voiceURI,
+    setVoiceURI,
     playFrom,
     stop,
     totalBars: flat.length,

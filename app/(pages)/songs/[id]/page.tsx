@@ -1,13 +1,14 @@
 // app/(pages)/songs/[id]/page.tsx   →   URL: /songs/<songId>
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Check, Pencil, Star } from "lucide-react";
 import { toast } from "sonner";
 import { BarEditor } from "@/app/components/songs/BarEditor";
 import { ChordChart } from "@/app/components/songs/ChordChart";
+import { MelodySheet } from "@/app/components/songs/MelodySheet";
 import {
   FailedState,
   GeneratingState,
@@ -32,6 +33,7 @@ import { usePersistentState } from "@/hooks/usePersistentState";
 import { useSongPlayer } from "@/hooks/useSongPlayer";
 import { useSong, useSongActions } from "@/hooks/useSongs";
 import { useTranspose } from "@/hooks/useTranspose";
+import { buildMelody } from "@/lib/melody";
 import { formatSongText } from "@/lib/music";
 import { downloadSongPdf } from "@/lib/songPdf";
 import type { SongSection, SongSegment } from "@/lib/songTypes";
@@ -45,10 +47,19 @@ export default function SongPage() {
   const actions = useSongActions();
 
   const t = useTranspose(song?.sections ?? NO_SECTIONS, song?.key ?? "C");
+  // The tune is worked out from the chords + lyrics (same every time for this song).
+  const melody = useMemo(
+    () =>
+      song && t.sections.length
+        ? buildMelody(t.sections, t.key, song.beatsPerBar, song._id)
+        : null,
+    [song, t.sections, t.key],
+  );
   const player = useSongPlayer({
     sections: t.sections,
     defaultTempo: song?.tempo ?? 90,
     beatsPerBar: song?.beatsPerBar ?? 4,
+    melody,
   });
 
   // Remembered per browser.
@@ -56,6 +67,8 @@ export default function SongPage() {
   const [textScale, setTextScale] = usePersistentState("sw:textScale", 1);
   const [showChords, setShowChords] = usePersistentState("sw:showChords", true);
   const [showLyrics, setShowLyrics] = usePersistentState("sw:showLyrics", true);
+  const [viewRaw, setView] = usePersistentState("sw:view", "chart");
+  const view: "chart" | "melody" = viewRaw === "melody" ? "melody" : "chart";
 
   const [editing, setEditing] = useState<{ si: number; bi: number } | null>(
     null,
@@ -272,6 +285,8 @@ export default function SongPage() {
             setShowChords={setShowChords}
             showLyrics={showLyrics}
             setShowLyrics={setShowLyrics}
+            view={view}
+            setView={setView}
             onCopy={() => void copyText()}
             onDownloadPdf={() => void downloadPdf()}
             pdfBusy={pdfBusy}
@@ -279,18 +294,29 @@ export default function SongPage() {
             busy={retrying}
           />
 
-          <ChordChart
-            sections={t.sections}
-            barsPerRow={barsPerRow}
-            showChords={showChords}
-            showLyrics={showLyrics}
-            textScale={textScale}
-            currentIndex={player.currentIndex}
-            onBarClick={(i) => player.playFrom(i)}
-            onEditBar={
-              transposed ? undefined : (si, bi) => setEditing({ si, bi })
-            }
-          />
+          {view === "melody" && melody ? (
+            <MelodySheet
+              melody={melody}
+              sections={t.sections}
+              barsPerRow={barsPerRow}
+              showChords={showChords}
+              currentIndex={player.currentIndex}
+              onBarClick={(i) => player.playFrom(i)}
+            />
+          ) : (
+            <ChordChart
+              sections={t.sections}
+              barsPerRow={barsPerRow}
+              showChords={showChords}
+              showLyrics={showLyrics}
+              textScale={textScale}
+              currentIndex={player.currentIndex}
+              onBarClick={(i) => player.playFrom(i)}
+              onEditBar={
+                transposed ? undefined : (si, bi) => setEditing({ si, bi })
+              }
+            />
+          )}
         </>
       )}
 

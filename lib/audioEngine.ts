@@ -1,0 +1,398 @@
+// lib/audioEngine.ts
+// Everything that makes sound, built from Web Audio (no sample files, no cost).
+//
+//   piano   two slightly-detuned "strings" per note with a piano-shaped harmonic
+//           spectrum, a hammer thump, a bright-to-mellow filter sweep, a fast
+//           then slow decay, a sustain pedal, stereo placement and room reverb
+//   voice   a vowel-singing synth (sawtooth + three formant filters + vibrato)
+//   drums   kick / snare / hat, and a metronome click
+//
+// All times are on the AudioContext clock, so the player can schedule ahead
+// and stay in time even when the browser is busy.
+import { midiToHz } from "@/lib/music";
+
+/* ------------------------------- shared bits ------------------------------- */
+
+const noiseCache = new WeakMap<AudioContext, AudioBuffer>();
+function noiseBuffer(ctx: AudioContext): AudioBuffer {
+  let buf = noiseCache.get(ctx);
+  if (!buf) {
+    buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.5), ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    noiseCache.set(ctx, buf);
+  }
+  return buf;
+}
+
+/** A soft, dark room: decaying stereo noise. */
+const reverbCache = new WeakMap<AudioContext, AudioBuffer>();
+function reverbImpulse(ctx: AudioContext): AudioBuffer {
+  let buf = reverbCache.get(ctx);
+  if (!buf) {
+    const seconds = 2.4;
+    const len = Math.floor(ctx.sampleRate * seconds);
+    buf = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch);
+      let lp = 0;
+      for (let i = 0; i < len; i++) {
+        const t = i / len;
+        // one-pole low-pass that closes over time = darker tail
+        const k = 0.55 - 0.45 * t;
+        lp += k * (Math.random() * 2 - 1 - lp);
+        d[i] = lp * Math.pow(1 - t, 2.6) * (i < 400 ? i / 400 : 1);
+      }
+    }
+    reverbCache.set(ctx, buf);
+  }
+  return buf;
+}
+
+const waveCache = new WeakMap<AudioContext, Map<number, PeriodicWave>>();
+/** Harmonic spectrum of a piano string: rich in low notes, purer up high. */
+function pianoWave(ctx: AudioContext, midi: number): PeriodicWave {
+  let m = waveCache.get(ctx);
+  if (!m) waveCache.set(ctx, (m = new Map()));
+  const bucket = Math.round(midi / 6);
+  let w = m.get(bucket);
+  if (!w) {
+    const partials = Math.max(6, Math.round(30 - (bucket * 6 - 28) * 0.32));
+    const real = new Float32Array(partials + 1);
+    const imag = new Float32Array(partials + 1);
+    for (let n = 1; n <= partials; n++) {
+      // roll-off plus a little ripple (the hammer strikes ~1/8 along the string)
+      const ripple = 1 - 0.55 * Math.abs(Math.sin((Math.PI * n) / 8));
+      imag[n] = (1 / Math.pow(n, 1.2)) * (0.45 + ripple);
+    }
+    w = ctx.createPeriodicWave(real, imag);
+    m.set(bucket, w);
+  }
+  return w;
+}
+
+/* --------------------------------- session --------------------------------- */
+
+/** One playback run. Fading it out cuts everything it started, tails included. */
+export interface Session {
+  ctx: AudioContext;
+  /** Connect instruments here. */
+  input: GainNode;
+  /** Fade out and disconnect. */
+  stop(fadeSeconds?: number): void;
+}
+
+export function createSession(ctx: AudioContext): Session {
+  const input = ctx.createGain();
+
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -20;
+  comp.knee.value = 24;
+  comp.ratio.value = 3.5;
+  comp.attack.value = 0.006;
+  comp.release.value = 0.25;
+
+  const out = ctx.createGain();
+  out.gain.value = 0.9;
+
+  const dry = ctx.createGain();
+  dry.gain.value = 1;
+  const send = ctx.createGain();
+  send.gain.value = 0.3;
+  const verb = ctx.createConvolver();
+  verb.buffer = reverbImpulse(ctx);
+
+  input.connect(dry).connect(comp);
+  input.connect(send).connect(verb).connect(comp);
+  comp.connect(out).connect(ctx.destination);
+
+  return {
+    ctx,
+    input,
+    stop(fade = 0.12) {
+      const t = ctx.currentTime;
+      out.gain.cancelScheduledValues(t);
+      out.gain.setValueAtTime(out.gain.value, t);
+      out.gain.linearRampToValueAtTime(0, t + fade);
+      setTimeout(
+        () => {
+          try {
+            out.disconnect();
+          } catch {
+            /* already gone */
+          }
+        },
+        (fade + 0.1) * 1000,
+      );
+    },
+  };
+}
+
+/* ---------------------------------- piano ---------------------------------- */
+
+export interface PianoOptions {
+  /** Seconds the key is held (with the pedal down this is when the pedal lifts). */
+  hold: number;
+  /** 0 to 1 */
+  velocity: number;
+  /** Pedal down: the note rings on and releases softly. */
+  pedal: boolean;
+}
+
+export function pianoNote(
+  s: Session,
+  midi: number,
+  when: number,
+  { hold, velocity, pedal }: PianoOptions,
+): void {
+  const ctx = s.ctx;
+  const f = midiToHz(midi);
+  const vel = Math.min(1, Math.max(0.05, velocity));
+  const peak = 0.11 * Math.pow(vel, 1.3);
+
+  // timbre
+  const filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.Q.value = 0.4;
+  const bright = Math.min(14000, f * (3 + vel * 9));
+  filter.frequency.setValueAtTime(bright, when);
+  filter.frequency.setTargetAtTime(Math.max(f * 2.2, 900), when + 0.01, 0.35);
+
+  // amplitude: quick "prompt" decay, then the long "after-sound"
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(0, when);
+  env.gain.linearRampToValueAtTime(peak, when + 0.004);
+  env.gain.setTargetAtTime(peak * 0.42, when + 0.004, 0.09);
+  const slowTau = Math.min(5, Math.max(0.9, 5.2 - (midi - 36) * 0.07));
+  const release = Math.max(0.05, hold);
+  if (release > 0.4) env.gain.setTargetAtTime(0, when + 0.4, slowTau);
+  const relTau = pedal ? 0.38 : 0.13;
+  env.gain.setTargetAtTime(0, when + release, relTau);
+  const end = when + release + relTau * 7;
+
+  // stereo: low notes left of centre, high notes right
+  const pan = ctx.createStereoPanner();
+  pan.pan.value = Math.max(-0.6, Math.min(0.6, (midi - 62) / 36));
+
+  filter.connect(env).connect(pan).connect(s.input);
+
+  const wave = pianoWave(ctx, midi);
+  // Two strings, a few cents apart, give the gentle shimmer of a real piano.
+  for (const cents of [-3.5, 3.5]) {
+    const osc = ctx.createOscillator();
+    osc.setPeriodicWave(wave);
+    osc.frequency.value = f;
+    osc.detune.value = cents;
+    osc.connect(filter);
+    osc.start(when);
+    osc.stop(end);
+  }
+
+  // hammer thump
+  const n = ctx.createBufferSource();
+  n.buffer = noiseBuffer(ctx);
+  const bp = ctx.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.frequency.value = Math.min(5000, f * 2.5);
+  bp.Q.value = 0.8;
+  const ng = ctx.createGain();
+  ng.gain.setValueAtTime(peak * 0.7, when);
+  ng.gain.exponentialRampToValueAtTime(0.0001, when + 0.035);
+  n.connect(bp).connect(ng).connect(pan);
+  n.start(when);
+  n.stop(when + 0.05);
+}
+
+/* ---------------------------------- voice ---------------------------------- */
+
+// Formant centres (Hz) for five vowels.
+const VOWELS = {
+  ah: [800, 1150, 2900],
+  eh: [530, 1840, 2480],
+  ee: [290, 2250, 3010],
+  oh: [570, 840, 2410],
+  oo: [310, 870, 2250],
+} as const;
+export type Vowel = keyof typeof VOWELS;
+
+/** The vowel a syllable is sung on, from its spelling. */
+export function vowelFor(text: string): Vowel {
+  const m = /[aeiouy]/i.exec(text);
+  switch (m?.[0].toLowerCase()) {
+    case "e":
+      return "eh";
+    case "i":
+    case "y":
+      return "ee";
+    case "o":
+      return "oh";
+    case "u":
+      return "oo";
+    default:
+      return "ah";
+  }
+}
+
+export function voiceNote(
+  s: Session,
+  midi: number,
+  when: number,
+  seconds: number,
+  vowel: Vowel,
+  velocity = 0.8,
+): void {
+  const ctx = s.ctx;
+  const f = midiToHz(midi);
+  const dur = Math.max(0.12, seconds);
+  const [f1, f2, f3] = VOWELS[vowel];
+
+  const src = ctx.createOscillator();
+  src.type = "sawtooth";
+  src.frequency.value = f;
+
+  // vibrato that fades in on longer notes
+  const lfo = ctx.createOscillator();
+  lfo.frequency.value = 5.4;
+  const lfoGain = ctx.createGain();
+  lfoGain.gain.setValueAtTime(0, when);
+  lfoGain.gain.linearRampToValueAtTime(f * 0.011, when + Math.min(0.4, dur));
+  lfo.connect(lfoGain).connect(src.frequency);
+
+  // small breathy noise
+  const noise = ctx.createBufferSource();
+  noise.buffer = noiseBuffer(ctx);
+  noise.loop = true;
+  const noiseGain = ctx.createGain();
+  noiseGain.gain.value = 0.05;
+
+  const mix = ctx.createGain();
+  [
+    [f1, 1.0, 9],
+    [f2, 0.55, 12],
+    [f3, 0.28, 14],
+  ].forEach(([freq, gain, q]) => {
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = freq;
+    bp.Q.value = q;
+    const g = ctx.createGain();
+    g.gain.value = gain;
+    src.connect(bp);
+    noiseGain.connect(bp);
+    bp.connect(g).connect(mix);
+  });
+  noise.connect(noiseGain);
+
+  const env = ctx.createGain();
+  const level = 0.55 * velocity;
+  const atk = Math.min(0.05, dur * 0.3);
+  const rel = Math.min(0.12, dur * 0.4);
+  env.gain.setValueAtTime(0, when);
+  env.gain.linearRampToValueAtTime(level, when + atk);
+  env.gain.setValueAtTime(level, when + dur - rel);
+  env.gain.linearRampToValueAtTime(0, when + dur);
+
+  mix.connect(env).connect(s.input);
+  for (const node of [src, lfo, noise]) {
+    node.start(when);
+    node.stop(when + dur + 0.05);
+  }
+}
+
+/* ---------------------------------- drums ---------------------------------- */
+
+export function click(s: Session, when: number, accent: boolean): void {
+  const ctx = s.ctx;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = "square";
+  osc.frequency.value = accent ? 1500 : 1000;
+  gain.gain.setValueAtTime(0.04, when);
+  gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.05);
+  osc.connect(gain).connect(s.input);
+  osc.start(when);
+  osc.stop(when + 0.06);
+}
+
+export function kick(s: Session, when: number, vol = 0.45): void {
+  const ctx = s.ctx;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(150, when);
+  osc.frequency.exponentialRampToValueAtTime(42, when + 0.12);
+  gain.gain.setValueAtTime(vol, when);
+  gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.25);
+  osc.connect(gain).connect(s.input);
+  osc.start(when);
+  osc.stop(when + 0.28);
+}
+
+export function snare(s: Session, when: number, vol = 0.22): void {
+  const ctx = s.ctx;
+  const noise = ctx.createBufferSource();
+  noise.buffer = noiseBuffer(ctx);
+  const hp = ctx.createBiquadFilter();
+  hp.type = "highpass";
+  hp.frequency.value = 1500;
+  const nGain = ctx.createGain();
+  nGain.gain.setValueAtTime(vol, when);
+  nGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.16);
+  noise.connect(hp).connect(nGain).connect(s.input);
+  noise.start(when);
+  noise.stop(when + 0.18);
+
+  const osc = ctx.createOscillator();
+  const oGain = ctx.createGain();
+  osc.type = "triangle";
+  osc.frequency.setValueAtTime(190, when);
+  osc.frequency.exponentialRampToValueAtTime(120, when + 0.08);
+  oGain.gain.setValueAtTime(vol * 0.6, when);
+  oGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.1);
+  osc.connect(oGain).connect(s.input);
+  osc.start(when);
+  osc.stop(when + 0.12);
+}
+
+export function hat(s: Session, when: number, vol = 0.06): void {
+  const ctx = s.ctx;
+  const noise = ctx.createBufferSource();
+  noise.buffer = noiseBuffer(ctx);
+  const hp = ctx.createBiquadFilter();
+  hp.type = "highpass";
+  hp.frequency.value = 7000;
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(vol, when);
+  gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.05);
+  noise.connect(hp).connect(gain).connect(s.input);
+  noise.start(when);
+  noise.stop(when + 0.06);
+}
+
+/**
+ * One pulse of a basic groove, with hi-hats on every 8th note.
+ *   4/4: kick on 1 and 3, snare on 2 and 4
+ *   3/4: kick on 1, light snare on 2 and 3 (waltz feel)
+ *   6/8: a pulse is an 8th note; kick on 1, snare on 4, hat on every pulse
+ */
+export function drums(
+  s: Session,
+  when: number,
+  beat: number,
+  beatsPerBar: number,
+  beatSeconds: number,
+): void {
+  if (beatsPerBar === 6) {
+    if (beat === 0) kick(s, when);
+    else if (beat === 3) snare(s, when);
+    hat(s, when, beat % 3 === 0 ? 0.08 : 0.05);
+    return;
+  }
+  if (beatsPerBar === 3) {
+    if (beat === 0) kick(s, when);
+    else snare(s, when, 0.14);
+  } else if (beat % 2 === 0) kick(s, when);
+  else snare(s, when);
+  hat(s, when, beat === 0 ? 0.08 : 0.06);
+  hat(s, when + beatSeconds / 2, 0.04);
+}
