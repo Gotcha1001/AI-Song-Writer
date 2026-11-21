@@ -27,7 +27,7 @@ const MARGIN = 14;
 const FOOTER = 10;
 
 /** Standard PDF fonts cover Latin-1 only: keep é, ü, ñ …, swap the rest. */
-function safe(s: string): string {
+export function safe(s: string): string {
   return s
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u201C\u201D]/g, '"')

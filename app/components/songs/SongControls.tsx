@@ -4,7 +4,9 @@
 import {
   Copy,
   FileDown,
+  FileMusic,
   Minus,
+  Music2,
   Music,
   Pause,
   Play,
@@ -14,6 +16,7 @@ import {
   Save,
   Sparkles,
   Mic,
+  Package,
   Wand2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -54,6 +57,15 @@ interface SongControlsProps {
   onCopy: () => void;
   onDownloadPdf: () => void;
   pdfBusy: boolean;
+  /** Download the melody as sheet music (PDF). */
+  onDownloadSheet: () => void;
+  sheetBusy: boolean;
+  /** Download the melody (and chords) as a MIDI file. */
+  onDownloadMidi: () => void;
+  midiBusy: boolean;
+  /** Download everything together in one ZIP. */
+  onDownloadAll: () => void;
+  bundleBusy: boolean;
   onRegenerate: () => void;
   busy: boolean;
   /** Ask the AI for a different melody over the same words. */
@@ -106,7 +118,7 @@ export function SongControls(p: SongControlsProps) {
   const transposed = p.steps !== 0;
 
   return (
-    <div className="grid gap-6 rounded-xl border border-cyan-500/25 bg-card p-4 sm:grid-cols-2 lg:grid-cols-5 print:hidden">
+    <div className="grid gap-6 rounded-xl border border-cyan-500/25 bg-card p-4 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_0.8fr_1fr_1.25fr] print:hidden">
       <Group title="Play along">
         <div className="flex items-center gap-2">
           <Button
@@ -342,9 +354,34 @@ export function SongControls(p: SongControlsProps) {
       </Group>
 
       <Group title="Song">
-        <div className="flex flex-col items-start gap-2">
+        <div className="flex flex-col items-stretch gap-2 [&>button]:w-full [&>button]:justify-start">
           <Button size="sm" onClick={p.onDownloadPdf} disabled={p.pdfBusy}>
-            <FileDown /> {p.pdfBusy ? "Making PDF…" : "Download PDF"}
+            <FileDown /> {p.pdfBusy ? "Making PDF…" : "Lyrics & chords (PDF)"}
+          </Button>
+          <Button
+            size="sm"
+            onClick={p.onDownloadSheet}
+            disabled={p.sheetBusy}
+            title="The melody as printable sheet music, with chords and the lyric under each note"
+          >
+            <Music2 /> {p.sheetBusy ? "Making PDF…" : "Melody sheet (PDF)"}
+          </Button>
+          <Button
+            size="sm"
+            onClick={p.onDownloadMidi}
+            disabled={p.midiBusy}
+            title="The sung melody with lyrics attached, plus a piano chord track. Opens in any music app or DAW."
+          >
+            <FileMusic /> {p.midiBusy ? "Making MIDI…" : "Melody (MIDI)"}
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={p.onDownloadAll}
+            disabled={p.bundleBusy}
+            title="Lyrics & chords (PDF), melody sheet (PDF) and melody (MIDI) in one ZIP"
+          >
+            <Package /> {p.bundleBusy ? "Packing…" : "Download all (ZIP)"}
           </Button>
           <Button variant="outline" size="sm" onClick={p.onCopy}>
             <Copy /> Copy as text
