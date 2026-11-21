@@ -16,6 +16,7 @@ import {
   beatsPerBarValidator,
   chordStyleValidator,
   lengthKeyValidator,
+  melodyValidator,
   sectionsValidator,
 } from "./lib/songValidators";
 
@@ -67,6 +68,11 @@ async function startGeneration(
     status: "generating",
     error: undefined,
     generationStartedAt: Date.now(),
+    // a new song needs a new melody
+    melody: undefined,
+    melodyStatus: undefined,
+    melodyError: undefined,
+    melodyStartedAt: undefined,
     updatedAt: Date.now(),
   });
   await ctx.scheduler.runAfter(0, internal.ai.generateSong, { songId });
@@ -213,6 +219,36 @@ export const regenerate = mutation({
   },
 });
 
+/**
+ * Ask the AI for a different melody over the same lyrics and chords
+ * (also used for "Try again" after a failed melody).
+ */
+export const regenerateMelody = mutation({
+  args: { songId: v.id("songs") },
+  handler: async (ctx, { songId }) => {
+    const { user, song } = await ownedSong(ctx, songId);
+    if (song.status !== "ready")
+      throw new ConvexError("Wait for the song to finish writing.");
+    const busy =
+      song.melodyStatus === "composing" &&
+      Date.now() - (song.melodyStartedAt ?? 0) < 3 * 60 * 1000;
+    if (busy) throw new ConvexError("Still composing — give it a moment.");
+
+    await spendGeneration(ctx, user._id, songId);
+    const startedAt = Date.now();
+    await ctx.db.patch(songId, {
+      melodyStatus: "composing",
+      melodyError: undefined,
+      melodyStartedAt: startedAt,
+      updatedAt: startedAt,
+    });
+    await ctx.scheduler.runAfter(0, internal.ai.composeMelody, {
+      songId,
+      startedAt,
+    });
+  },
+});
+
 /** Save edited / transposed chart content. */
 export const updateContent = mutation({
   args: {
@@ -306,10 +342,52 @@ export const saveGenerated = internalMutation({
   handler: async (ctx, { songId, ...fields }) => {
     const song = await ctx.db.get(songId);
     if (!song) return; // deleted while generating
+    const startedAt = Date.now();
     await ctx.db.patch(songId, {
       ...fields,
       status: "ready",
       error: undefined,
+      // the lyrics are done; the AI now composes the tune over them
+      melody: undefined,
+      melodyStatus: "composing",
+      melodyError: undefined,
+      melodyStartedAt: startedAt,
+      updatedAt: startedAt,
+    });
+    await ctx.scheduler.runAfter(0, internal.ai.composeMelody, {
+      songId,
+      startedAt,
+    });
+  },
+});
+
+export const saveMelody = internalMutation({
+  args: {
+    songId: v.id("songs"),
+    startedAt: v.number(),
+    melody: melodyValidator,
+  },
+  handler: async (ctx, { songId, startedAt, melody }) => {
+    const song = await ctx.db.get(songId);
+    // deleted, rewritten, or a newer melody was asked for: drop this result
+    if (!song || song.melodyStartedAt !== startedAt) return;
+    await ctx.db.patch(songId, {
+      melody,
+      melodyStatus: "ready",
+      melodyError: undefined,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const markMelodyFailed = internalMutation({
+  args: { songId: v.id("songs"), startedAt: v.number(), error: v.string() },
+  handler: async (ctx, { songId, startedAt, error }) => {
+    const song = await ctx.db.get(songId);
+    if (!song || song.melodyStartedAt !== startedAt) return;
+    await ctx.db.patch(songId, {
+      melodyStatus: "failed",
+      melodyError: error.slice(0, 300),
       updatedAt: Date.now(),
     });
   },

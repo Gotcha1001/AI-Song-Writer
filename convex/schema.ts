@@ -5,6 +5,8 @@ import {
   beatsPerBarValidator,
   chordStyleValidator,
   lengthKeyValidator,
+  melodyStatusValidator,
+  melodyValidator,
   sectionsValidator,
 } from "./lib/songValidators";
 
@@ -62,6 +64,13 @@ export default defineSchema({
     ),
     error: v.optional(v.string()),
     generationStartedAt: v.optional(v.number()),
+
+    // The sung melody, composed by the AI from the lyrics + chords (a second,
+    // separate AI step, so the song shows up first and the tune follows).
+    melody: v.optional(melodyValidator),
+    melodyStatus: v.optional(melodyStatusValidator),
+    melodyError: v.optional(v.string()),
+    melodyStartedAt: v.optional(v.number()),
 
     isFavorite: v.boolean(),
     updatedAt: v.number(),

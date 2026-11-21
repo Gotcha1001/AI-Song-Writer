@@ -20,6 +20,24 @@ export const sectionValidator = v.object({
 
 export const sectionsValidator = v.array(sectionValidator);
 
+/**
+ * One note of the AI-composed melody. `d` is its length in sixteenth notes,
+ * `deg` its scale degree (0 = tonic, 7 = octave up); no `deg` means a rest.
+ */
+export const melodyNoteValidator = v.object({
+  d: v.number(),
+  deg: v.optional(v.number()),
+});
+
+/** The whole melody: one list of notes per bar, in song order. [] = not composed. */
+export const melodyValidator = v.array(v.array(melodyNoteValidator));
+
+export const melodyStatusValidator = v.union(
+  v.literal("composing"),
+  v.literal("ready"),
+  v.literal("failed"),
+);
+
 export const lengthKeyValidator = v.union(
   v.literal("short"),
   v.literal("standard"),

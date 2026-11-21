@@ -4,86 +4,27 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalAction } from "./_generated/server";
+import {
+  buildBarSpecs,
+  buildMelodyPrompt,
+  parseMelodyJson,
+  pickHints,
+  unitsPerBar,
+  type StoredBar,
+} from "./lib/melodyPrompt";
+import { callModel, DEFAULT_MODEL, ModelError, sleep } from "./lib/openrouter";
 import { buildPrompt, parseSongJson } from "./lib/songPrompt";
 
 /**
  * Env (set in the Convex dashboard, or `npx convex env set …`):
  *   OPENROUTER_API_KEY   required
- *   OPENROUTER_MODEL     optional, defaults to the free model below
+ *   OPENROUTER_MODEL     optional, defaults to the free model in lib/openrouter.ts
  */
-const DEFAULT_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free";
 const MAX_ATTEMPTS = 3;
-
-interface OpenRouterResponse {
-  choices?: { message?: { content?: string | null } }[];
-  error?: { message?: string; code?: number };
-}
-
-class ModelError extends Error {
-  constructor(
-    message: string,
-    readonly retryAfterMs: number,
-  ) {
-    super(message);
-  }
-}
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-async function callModel(
-  apiKey: string,
-  model: string,
-  system: string,
-  user: string,
-): Promise<string> {
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-      "X-Title": "Song Writer",
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      temperature: 0.9,
-      // Reasoning models spend tokens thinking first, so leave plenty of room.
-      max_tokens: 12000,
-    }),
-  });
-
-  const text = await res.text();
-  let json: OpenRouterResponse;
-  try {
-    json = JSON.parse(text) as OpenRouterResponse;
-  } catch {
-    throw new ModelError(
-      `OpenRouter sent an unreadable reply (HTTP ${res.status})`,
-      2000,
-    );
-  }
-
-  if (!res.ok || json.error) {
-    const rateLimited = res.status === 429 || json.error?.code === 429;
-    throw new ModelError(
-      json.error?.message ?? `OpenRouter error (HTTP ${res.status})`,
-      rateLimited ? 6000 : 2000,
-    );
-  }
-
-  const content = json.choices?.[0]?.message?.content;
-  if (!content || !content.trim()) {
-    throw new ModelError("The model returned an empty reply", 2000);
-  }
-  return content;
-}
 
 export const generateSong = internalAction({
   args: { songId: v.id("songs") },
-  handler: async (ctx, { songId }) => {
+  handler: async (ctx, { songId }): Promise<void> => {
     const song = await ctx.runQuery(internal.songs.getForGeneration, {
       songId,
     });
@@ -118,9 +59,10 @@ export const generateSong = internalAction({
     let lastError = "Unknown error";
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
-        const raw = await callModel(apiKey, model, system, user);
+        const raw = await callModel({ apiKey, model, system, user });
         const parsed = parseSongJson(raw, song.requestedKey);
 
+        // Saving also starts the melody step (see songs.saveGenerated).
         await ctx.runMutation(internal.songs.saveGenerated, {
           songId,
           title: parsed.title,
@@ -142,5 +84,113 @@ export const generateSong = internalAction({
     }
 
     await fail(`Couldn't write the song (${lastError}). Try again.`);
+  },
+});
+
+/**
+ * Second AI step: compose the vocal melody from the finished lyrics + chords.
+ * Every bar is checked (lengths add up, one note per syllable). Bars that fail
+ * are asked for again, up to MAX_ATTEMPTS times; anything still missing is left
+ * empty and the app draws its built-in tune for just those bars.
+ */
+export const composeMelody = internalAction({
+  args: { songId: v.id("songs"), startedAt: v.number() },
+  handler: async (ctx, { songId, startedAt }): Promise<void> => {
+    const song = await ctx.runQuery(internal.songs.getForGeneration, {
+      songId,
+    });
+    if (
+      !song ||
+      song.status !== "ready" ||
+      song.melodyStatus !== "composing" ||
+      song.melodyStartedAt !== startedAt
+    )
+      return;
+
+    const fail = (error: string) =>
+      ctx.runMutation(internal.songs.markMelodyFailed, {
+        songId,
+        startedAt,
+        error,
+      });
+
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      await fail("The AI isn't configured yet (missing API key).");
+      return;
+    }
+
+    const model = process.env.OPENROUTER_MODEL || DEFAULT_MODEL;
+    const specs = buildBarSpecs(song.sections, song.beatsPerBar);
+    const U = unitsPerBar(song.beatsPerBar);
+    const sungBars = specs.filter((s) => s.syllables.length > 0);
+    if (sungBars.length === 0) {
+      await fail("This song has no lyrics to put a melody to.");
+      return;
+    }
+
+    const hints = pickHints(2);
+    const done = new Map<number, StoredBar>();
+    let lastError = "Unknown error";
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const wanted = sungBars.map((s) => s.index).filter((i) => !done.has(i));
+      if (wanted.length === 0) break;
+
+      try {
+        const { system, user } = buildMelodyPrompt({
+          title: song.title,
+          key: song.key,
+          tempo: song.tempo,
+          beatsPerBar: song.beatsPerBar,
+          mood: song.mood,
+          genre: song.genre,
+          language: song.language,
+          specs,
+          wanted,
+          done,
+          hints,
+        });
+        const raw = await callModel({
+          apiKey,
+          model,
+          system,
+          user,
+          temperature: 1,
+          title: "Song Writer melody",
+        });
+        const got = parseMelodyJson(raw, specs, wanted, song.beatsPerBar);
+        for (const [i, bar] of got) done.set(i, bar);
+        if (got.size < wanted.length) {
+          lastError = `${wanted.length - got.size} bars didn't fit the lyrics`;
+        }
+      } catch (e) {
+        lastError = e instanceof Error ? e.message : String(e);
+        console.error(
+          `[melody] attempt ${attempt}/${MAX_ATTEMPTS} failed:`,
+          lastError,
+        );
+        if (attempt < MAX_ATTEMPTS) {
+          await sleep(e instanceof ModelError ? e.retryAfterMs : 1500);
+        }
+      }
+    }
+
+    if (done.size === 0) {
+      await fail(`Couldn't compose a melody (${lastError}). Try again.`);
+      return;
+    }
+
+    // One list per bar, in song order. Instrumental bars are one long rest;
+    // bars the AI never got right stay [] (the app fills those in itself).
+    const melody: StoredBar[] = specs.map((spec) =>
+      spec.syllables.length === 0 ? [{ d: U }] : (done.get(spec.index) ?? []),
+    );
+
+    await ctx.runMutation(internal.songs.saveMelody, {
+      songId,
+      startedAt,
+      melody,
+    });
   },
 });
