@@ -36,8 +36,14 @@ import { useTranspose } from "@/hooks/useTranspose";
 import { buildMelody } from "@/lib/melody";
 import { formatSongText } from "@/lib/music";
 import { downloadSongPdf } from "@/lib/songPdf";
+
 import type { SongSection, SongSegment } from "@/lib/songTypes";
 import { cn } from "@/lib/utils";
+import {
+  downloadMelodySheetPdf,
+  downloadSongBundle,
+  downloadSongMidi,
+} from "@/lib/sondDownload";
 
 const NO_SECTIONS: SongSection[] = [];
 
@@ -85,6 +91,9 @@ export default function SongPage() {
   const [confirmRegen, setConfirmRegen] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
+  const [sheetBusy, setSheetBusy] = useState(false);
+  const [midiBusy, setMidiBusy] = useState(false);
+  const [bundleBusy, setBundleBusy] = useState(false);
   const [melodyAsking, setMelodyAsking] = useState(false);
 
   if (song === undefined) {
@@ -179,6 +188,88 @@ export default function SongPage() {
       toast.error("Couldn't make the PDF. Please try again.");
     } finally {
       setPdfBusy(false);
+    }
+  };
+
+  const warnIfPlaceholder = () => {
+    if (melodyAsking || song.melodyStatus === "composing") {
+      toast.message(
+        "The AI is still composing, so this download has the placeholder tune.",
+      );
+    }
+  };
+
+  /** Settings for the PDF, exactly as shown on screen. */
+  const pdfOptions = () => ({
+    title: song.title,
+    key: t.key,
+    tempo: player.bpm,
+    beatsPerBar: song.beatsPerBar,
+    subtitle: `${song.genre} · ${song.mood}`,
+    sections: t.sections,
+    barsPerRow,
+    showChords,
+    showLyrics,
+    textScale,
+  });
+
+  /** Settings for the melody sheet PDF, matching the on-screen sheet. */
+  const sheetOptions = (m: NonNullable<typeof melody>) => ({
+    title: song.title,
+    key: t.key,
+    tempo: player.bpm,
+    beatsPerBar: song.beatsPerBar,
+    subtitle: `${song.genre} · ${song.mood}`,
+    melody: m,
+    sections: t.sections,
+    barsPerRow,
+    showChords,
+  });
+
+  const downloadSheet = async () => {
+    if (!melody) return;
+    setSheetBusy(true);
+    try {
+      warnIfPlaceholder();
+      await downloadMelodySheetPdf(sheetOptions(melody));
+    } catch {
+      toast.error("Couldn't make the melody sheet. Please try again.");
+    } finally {
+      setSheetBusy(false);
+    }
+  };
+
+  const downloadMidi = () => {
+    if (!melody) return;
+    setMidiBusy(true);
+    try {
+      warnIfPlaceholder();
+      downloadSongMidi({
+        title: song.title,
+        bpm: player.bpm,
+        melody,
+      });
+    } catch {
+      toast.error("Couldn't make the MIDI file. Please try again.");
+    } finally {
+      setMidiBusy(false);
+    }
+  };
+
+  const downloadAll = async () => {
+    if (!melody) return;
+    setBundleBusy(true);
+    try {
+      warnIfPlaceholder();
+      await downloadSongBundle(pdfOptions(), sheetOptions(melody), {
+        title: song.title,
+        bpm: player.bpm,
+        melody,
+      });
+    } catch {
+      toast.error("Couldn't make the download. Please try again.");
+    } finally {
+      setBundleBusy(false);
     }
   };
 
@@ -307,6 +398,12 @@ export default function SongPage() {
             onCopy={() => void copyText()}
             onDownloadPdf={() => void downloadPdf()}
             pdfBusy={pdfBusy}
+            onDownloadSheet={() => void downloadSheet()}
+            sheetBusy={sheetBusy}
+            onDownloadMidi={downloadMidi}
+            midiBusy={midiBusy}
+            onDownloadAll={() => void downloadAll()}
+            bundleBusy={bundleBusy}
             onRegenerate={() => setConfirmRegen(true)}
             busy={retrying}
             onNewMelody={() => void newMelody()}
