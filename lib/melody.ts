@@ -1,8 +1,12 @@
 // lib/melody.ts
 // Turns the chords + lyrics of a song into a singable melody.
 //
-// The AI only writes chords and words, so the tune is composed here, the same
-// way every time for the same song (it is seeded, not random):
+// The tune is composed by the AI (convex/ai.ts -> composeMelody) and stored on
+// the song. This file turns that stored melody into notes for the sheet and the
+// player, checking every bar against the current lyrics. Any bar that is
+// missing or no longer fits (older songs, a lyric you edited, a bar the AI got
+// wrong) gets a fallback tune from the rules below, so there is always a tune:
+//
 //   - every syllable gets one note, so the words always fit the bar
 //   - strong beats land on notes of the chord that is playing
 //   - weak beats move by step, phrases rise and fall, and every 4 bars
@@ -11,6 +15,8 @@
 //
 // Notes are stored as SCALE DEGREES (0 = tonic, 7 = the octave above), so the
 // melody keeps its shape when the song is transposed.
+import { capSyllables, barSyllables } from "@/convex/lib/syllables";
+import type { StoredBar } from "@/convex/lib/melodyPrompt";
 import { chordTones } from "@/lib/music";
 import type { SongSection } from "@/lib/songTypes";
 
@@ -77,87 +83,8 @@ export function degreeToStep(k: KeySpec, deg: number): number {
 
 /* -------------------------------- syllables -------------------------------- */
 
-const V = "aeiouyàáâãäåèéêëìíîïòóôõöùúûüæœ";
-const isVowel = (ch: string) => V.includes(ch.toLowerCase());
-
-/** Split one word into singable syllables (a good-enough rule of thumb). */
-export function syllabify(word: string): string[] {
-  const w = word;
-  // vowel groups; "y" at the start of a word is a consonant
-  const groups: { s: number; e: number }[] = [];
-  let i = 0;
-  while (i < w.length) {
-    const c = w[i];
-    const vowel = isVowel(c) && !(i === 0 && c.toLowerCase() === "y");
-    if (vowel) {
-      let j = i;
-      while (j < w.length && isVowel(w[j])) j++;
-      groups.push({ s: i, e: j });
-      i = j;
-    } else i++;
-  }
-  if (groups.length <= 1) return [w];
-
-  const lower = w.toLowerCase().replace(/[^a-z]+$/, "");
-  const last = groups[groups.length - 1];
-  const endsInLetters = lower.length;
-  // silent final "e" (made, love) but not "le" (table) or a lone "e" word
-  if (
-    last.e - last.s === 1 &&
-    lower.endsWith("e") &&
-    last.e >= endsInLetters &&
-    !/[^aeiouy]le$/.test(lower) &&
-    !isVowel(lower[lower.length - 2] ?? "a")
-  ) {
-    groups.pop();
-  } else if (
-    // silent "ed" (walked, loved) but not after t / d (wanted, needed)
-    /[^aeiouytd]ed$/.test(lower) &&
-    last.e - last.s === 1
-  ) {
-    groups.pop();
-  }
-  if (groups.length <= 1) return [w];
-
-  const cuts: number[] = [];
-  for (let g = 0; g < groups.length - 1; g++) {
-    const between = groups[g + 1].s - groups[g].e;
-    cuts.push(groups[g].e + (between <= 1 ? 0 : Math.floor(between / 2)));
-  }
-  const out: string[] = [];
-  let from = 0;
-  for (const c of cuts) {
-    out.push(w.slice(from, c));
-    from = c;
-  }
-  out.push(w.slice(from));
-  return out.filter((x) => x.length > 0);
-}
-
-export interface Syllable {
-  text: string;
-  /** More of the same word follows (draw a hyphen under the lyric). */
-  joinNext: boolean;
-}
-
-/** All the syllables sung in one bar, in order. */
-export function barSyllables(segments: { lyric: string }[]): Syllable[] {
-  const out: Syllable[] = [];
-  for (const seg of segments) {
-    const tokens = seg.lyric
-      .split(/\s+/)
-      .filter((t) => /[\p{L}\p{N}]/u.test(t));
-    for (const raw of tokens) {
-      const cont = raw.endsWith("-");
-      const token = cont ? raw.slice(0, -1) : raw;
-      const parts = syllabify(token);
-      parts.forEach((text, i) =>
-        out.push({ text, joinNext: i < parts.length - 1 || cont }),
-      );
-    }
-  }
-  return out;
-}
+// The split lives in convex/lib/syllables.ts so the AI prompt and the sheet agree.
+export { barSyllables, syllabify, type Syllable } from "@/convex/lib/syllables";
 
 /* --------------------------------- rhythm --------------------------------- */
 
@@ -241,6 +168,41 @@ export interface Melody {
   bars: MelodyBar[];
 }
 
+/**
+ * Turns one AI-composed bar into notes, or null if it does not fit the bar:
+ * lengths must add up to the bar and every syllable needs exactly one note.
+ */
+function storedBarToNotes(
+  stored: StoredBar | undefined,
+  syl: { text: string; joinNext: boolean }[],
+  U: number,
+): MelodyNote[] | null {
+  if (!stored || stored.length === 0) return null;
+  const total = stored.reduce((a, n) => a + n.d, 0);
+  const sung = stored.filter((n) => n.deg !== undefined).length;
+  if (total !== U || sung !== syl.length) return null;
+
+  const notes: MelodyNote[] = [];
+  let u = 0;
+  let si = 0;
+  for (const n of stored) {
+    if (n.deg === undefined) {
+      notes.push({ u, d: n.d, deg: null, text: "", joinNext: false });
+    } else {
+      const s = syl[si++];
+      notes.push({
+        u,
+        d: n.d,
+        deg: n.deg,
+        text: s.text,
+        joinNext: s.joinNext,
+      });
+    }
+    u += n.d;
+  }
+  return notes;
+}
+
 function hash(str: string): number {
   let h = 2166136261;
   for (let i = 0; i < str.length; i++) {
@@ -277,13 +239,15 @@ function sectionShape(name: string): { base: number; height: number } {
 /**
  * @param sections the (possibly transposed) song sections
  * @param key      the key of those sections, e.g. "Am"
- * @param seed     anything stable for this song (its id), so the tune never changes
+ * @param seed     anything stable for this song (its id), so the fallback tune never changes
+ * @param composed the AI's melody, one list of notes per bar in song order
  */
 export function buildMelody(
   sections: SongSection[],
   key: string,
   beatsPerBar: number,
   seed: string,
+  composed?: StoredBar[] | null,
 ): Melody {
   const k = parseKeySpec(key);
   const U = unitsPerBar(beatsPerBar);
@@ -295,6 +259,7 @@ export function buildMelody(
   for (let d = LOW_DEG; d <= HIGH_DEG; d++) allDegs.push(d);
 
   const bars: MelodyBar[] = [];
+  let flatIndex = 0;
 
   for (const section of sections) {
     const shape = sectionShape(section.name);
@@ -305,6 +270,7 @@ export function buildMelody(
     const written: { notes: MelodyNote[] }[] = [];
 
     section.bars.forEach((bar, bi) => {
+      const flat = flatIndex++;
       const rand = rng(hash(`${seed}|${tuneId}|${bi}`));
 
       /* chords by position */
@@ -322,18 +288,21 @@ export function buildMelody(
       };
 
       /* syllables -> rhythm */
-      let syl = barSyllables(segs);
-      if (syl.length > U) {
-        const head = syl.slice(0, U - 1);
-        const tail = syl.slice(U - 1);
-        syl = [
-          ...head,
-          {
-            text: tail.map((s) => s.text).join(""),
-            joinNext: tail[tail.length - 1].joinNext,
-          },
-        ];
+      const syl = capSyllables(barSyllables(segs), U);
+
+      /* the AI's tune, when it fits this bar's words */
+      const fromAi = storedBarToNotes(composed?.[flat], syl, U);
+      if (fromAi) {
+        const lastPitch = [...fromAi].reverse().find((n) => n.deg !== null);
+        if (lastPitch && lastPitch.deg !== null) {
+          prev2 = prev;
+          prev = lastPitch.deg;
+        }
+        written.push({ notes: fromAi });
+        bars.push({ notes: fromAi, chords });
+        return;
       }
+
       const rhythm = rhythmFor(syl.length, beatsPerBar);
 
       /* where this bar should be heading (a gentle arch over each 4 bars) */

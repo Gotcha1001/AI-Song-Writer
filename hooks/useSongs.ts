@@ -31,6 +31,7 @@ export function errorMessage(e: unknown): string {
 export function useSongActions() {
   const request = useMutation(api.songs.request);
   const regenerate = useMutation(api.songs.regenerate);
+  const regenerateMelody = useMutation(api.songs.regenerateMelody);
   const updateContent = useMutation(api.songs.updateContent);
   const patchMeta = useMutation(api.songs.patchMeta);
   const remove = useMutation(api.songs.remove);
@@ -49,6 +50,8 @@ export function useSongActions() {
         run(() => request(args)),
       regenerate: async (songId: Id<"songs">) =>
         (await run(() => regenerate({ songId }))) !== null,
+      regenerateMelody: async (songId: Id<"songs">) =>
+        (await run(() => regenerateMelody({ songId }))) !== null,
       saveContent: async (args: FunctionArgs<typeof api.songs.updateContent>) =>
         (await run(() => updateContent(args))) !== null,
       rename: async (songId: Id<"songs">, title: string) =>
@@ -58,5 +61,5 @@ export function useSongActions() {
       remove: async (songId: Id<"songs">) =>
         (await run(() => remove({ songId }))) !== null,
     };
-  }, [request, regenerate, updateContent, patchMeta, remove]);
+  }, [request, regenerate, regenerateMelody, updateContent, patchMeta, remove]);
 }

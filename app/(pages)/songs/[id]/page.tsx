@@ -47,11 +47,18 @@ export default function SongPage() {
   const actions = useSongActions();
 
   const t = useTranspose(song?.sections ?? NO_SECTIONS, song?.key ?? "C");
-  // The tune is worked out from the chords + lyrics (same every time for this song).
+  // The tune is composed by the AI from the lyrics + chords and saved on the song.
+  // Bars it didn't compose (older songs, edited lyrics) get a built-in fallback.
   const melody = useMemo(
     () =>
       song && t.sections.length
-        ? buildMelody(t.sections, t.key, song.beatsPerBar, song._id)
+        ? buildMelody(
+            t.sections,
+            t.key,
+            song.beatsPerBar,
+            song._id,
+            song.melody,
+          )
         : null,
     [song, t.sections, t.key],
   );
@@ -78,6 +85,7 @@ export default function SongPage() {
   const [confirmRegen, setConfirmRegen] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
+  const [melodyAsking, setMelodyAsking] = useState(false);
 
   if (song === undefined) {
     return (
@@ -179,6 +187,15 @@ export default function SongPage() {
     await actions.regenerate(song._id);
     setRetrying(false);
   };
+
+  const newMelody = async () => {
+    player.stop();
+    setMelodyAsking(true);
+    await actions.regenerateMelody(song._id);
+    setMelodyAsking(false);
+  };
+
+  const composing = melodyAsking || song.melodyStatus === "composing";
 
   const editingBar = editing
     ? song.sections[editing.si]?.bars[editing.bi]
@@ -292,7 +309,34 @@ export default function SongPage() {
             pdfBusy={pdfBusy}
             onRegenerate={() => setConfirmRegen(true)}
             busy={retrying}
+            onNewMelody={() => void newMelody()}
+            melodyBusy={melodyAsking}
           />
+
+          {composing ? (
+            <p className="rounded-lg border border-cyan-500/25 bg-card px-4 py-3 text-sm text-muted-foreground print:hidden">
+              The AI is composing a melody for your lyrics. What you see and
+              hear now is a placeholder tune, and it will be replaced as soon as
+              the new melody is ready.
+            </p>
+          ) : song.melodyStatus === "failed" ? (
+            <p className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 bg-card px-4 py-3 text-sm print:hidden">
+              <span>{song.melodyError ?? "Couldn't compose the melody."}</span>
+              <Button size="sm" onClick={() => void newMelody()}>
+                Try again
+              </Button>
+            </p>
+          ) : !song.melodyStatus ? (
+            <p className="flex flex-wrap items-center gap-3 rounded-lg border border-cyan-500/25 bg-card px-4 py-3 text-sm text-muted-foreground print:hidden">
+              <span>
+                This song&apos;s tune was made by simple rules. Let the AI
+                compose a real melody from the lyrics instead.
+              </span>
+              <Button size="sm" onClick={() => void newMelody()}>
+                Compose with AI
+              </Button>
+            </p>
+          ) : null}
 
           {view === "melody" && melody ? (
             <MelodySheet
