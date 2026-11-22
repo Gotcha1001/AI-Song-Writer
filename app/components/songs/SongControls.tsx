@@ -183,6 +183,18 @@ export function SongControls(p: SongControlsProps) {
           checked={player.drumsOn}
           onChange={player.setDrumsOn}
         />
+        <Toggle
+          id="snd-bass"
+          label="Bass (roots)"
+          checked={player.bassOn}
+          onChange={player.setBassOn}
+        />
+        <Toggle
+          id="snd-strings"
+          label="Strings (1-5-1)"
+          checked={player.stringsOn}
+          onChange={player.setStringsOn}
+        />
         <p className="text-xs text-muted-foreground">
           Tap any bar to start from there.
         </p>

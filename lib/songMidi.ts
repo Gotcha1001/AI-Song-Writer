@@ -7,8 +7,10 @@
 //   2. Melody    : the sung notes, with each syllable attached as a MIDI lyric
 //                  (karaoke players and most notation apps will show them)
 //   3. Chords    : a voice-led piano part (optional)
+//   4. Bass      : the root of each chord, on electric bass (with the chords)
+//   5. Strings   : a 1-5-1 power chord per chord, on string ensemble (with the chords)
 import { degreeToMidi, type Melody } from "@/lib/melody";
-import { voiceChord } from "@/lib/music";
+import { bassRoot, stringsPowerChord, voiceChord } from "@/lib/music";
 
 const PPQ = 480; // ticks per quarter note
 const TICKS_PER_SIXTEENTH = PPQ / 4; // melody time is measured in sixteenths
@@ -187,6 +189,36 @@ export function buildSongMidi(o: SongMidiOptions): Uint8Array {
       });
     });
     tracks.push(track(comp, endTick));
+
+    /* ---- track 4: bass, roots only (channel 2) ---- */
+    const bass: Ev[] = [
+      meta(0, 0x03, textBytes("Bass")),
+      programChange(2, 33), // Electric Bass (finger)
+    ];
+    /* ---- track 5: strings, 1-5-1 power chords (channel 3) ---- */
+    const strings: Ev[] = [
+      meta(0, 0x03, textBytes("Strings")),
+      programChange(3, 48), // String Ensemble 1
+    ];
+    melody.bars.forEach((bar, bi) => {
+      const barStart = bi * barTicks;
+      const chords = [...bar.chords].sort((a, b) => a.u - b.u);
+      chords.forEach((c, ci) => {
+        const from = barStart + c.u * TICKS_PER_SIXTEENTH;
+        const to =
+          barStart +
+          (ci + 1 < chords.length ? chords[ci + 1].u : melody.unitsPerBar) *
+            TICKS_PER_SIXTEENTH;
+        const len = Math.max(1, to - from - 6);
+        const root = bassRoot(c.chord);
+        if (root !== null)
+          bass.push(noteOn(from, 2, root, 88), noteOff(from + len, 2, root));
+        for (const note of stringsPowerChord(c.chord) ?? []) {
+          strings.push(noteOn(from, 3, note, 60), noteOff(from + len, 3, note));
+        }
+      });
+    });
+    tracks.push(track(bass, endTick), track(strings, endTick));
   }
 
   const header = [

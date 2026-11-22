@@ -3,16 +3,18 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  bassNote,
   click,
   createSession,
   drums,
   pianoNote,
+  stringsNote,
   vowelFor,
   voiceNote,
   type Session,
 } from "@/lib/audioEngine";
 import { barSyllables, degreeToMidi, type Melody } from "@/lib/melody";
-import { voiceChord } from "@/lib/music";
+import { bassRoot, stringsPowerChord, voiceChord } from "@/lib/music";
 import type { SongBar, SongSection } from "@/lib/songTypes";
 
 export interface FlatBar {
@@ -75,6 +77,8 @@ export function useSongPlayer({
   const [chordsOn, setChordsOn] = useState(true);
   const [clickOn, setClickOn] = useState(false);
   const [drumsOn, setDrumsOn] = useState(false);
+  const [bassOn, setBassOn] = useState(true);
+  const [stringsOn, setStringsOn] = useState(true);
   const [loop, setLoop] = useState(false);
   const [pedalOn, setPedalOn] = useState(true);
   const [pianoStyle, setPianoStyle] = useState<PianoStyle>("chords");
@@ -94,6 +98,8 @@ export function useSongPlayer({
     chordsOn,
     clickOn,
     drumsOn,
+    bassOn,
+    stringsOn,
     loop,
     beatsPerBar,
     pedalOn,
@@ -112,6 +118,8 @@ export function useSongPlayer({
       chordsOn,
       clickOn,
       drumsOn,
+      bassOn,
+      stringsOn,
       loop,
       beatsPerBar,
       pedalOn,
@@ -127,6 +135,8 @@ export function useSongPlayer({
     chordsOn,
     clickOn,
     drumsOn,
+    bassOn,
+    stringsOn,
     loop,
     beatsPerBar,
     pedalOn,
@@ -222,6 +232,42 @@ export function useSongPlayer({
         if (L.clickOn && (!compound || beat % 3 === 0))
           click(session, when, beat === 0);
         if (L.drumsOn) drums(session, when, beat, L.beatsPerBar, beatSec);
+
+        /* ---- bass (root only) and strings (1-5-1 power chord) ---- */
+        if (L.bassOn || L.stringsOn) {
+          const segs = item.bar.segments;
+          const starts = segs.map((_, i) =>
+            Math.floor((i * L.beatsPerBar) / segs.length),
+          );
+          let active = -1;
+          for (let i = 0; i < segs.length; i++) {
+            if (starts[i] <= beat && segs[i].chord) active = i;
+          }
+          const chord = active >= 0 ? segs[active].chord : null;
+          if (chord && starts[active] === beat) {
+            const nextStart =
+              active + 1 < segs.length ? starts[active + 1] : L.beatsPerBar;
+            const length = (nextStart - beat) * beatSec;
+            if (L.bassOn) {
+              const root = bassRoot(chord);
+              if (root !== null)
+                bassNote(session, root, when, length * 0.97, 0.85);
+            }
+            if (L.stringsOn) {
+              const notes = stringsPowerChord(chord);
+              // a little overlap into the next chord so the section never gaps
+              notes?.forEach((m, i) =>
+                stringsNote(
+                  session,
+                  m,
+                  when,
+                  length + 0.1,
+                  i === 0 ? 0.7 : 0.55,
+                ),
+              );
+            }
+          }
+        }
 
         /* ---- piano ---- */
         if (L.chordsOn) {
@@ -401,7 +447,11 @@ export function useSongPlayer({
     clickOn,
     setClickOn,
     drumsOn,
+    bassOn,
+    stringsOn,
     setDrumsOn,
+    setBassOn,
+    setStringsOn,
     loop,
     setLoop,
     pedalOn,

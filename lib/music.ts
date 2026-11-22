@@ -198,6 +198,29 @@ export function voiceChord(
   return { bass: [bassMidi, bassMidi + 12], hand: best };
 }
 
+/* ----------------------------- bass and strings ----------------------------- */
+
+/**
+ * Bass guitar part: just the root of the chord, in the E1 to D#2 range
+ * (MIDI 28-39). Slash chords still use their root, not the slash note.
+ */
+export function bassRoot(chord: string): number | null {
+  const t = chordTones(chord);
+  if (!t) return null;
+  return 28 + ((((t.root - 28) % 12) + 12) % 12);
+}
+
+/**
+ * String section part: a power chord, 1-5-1 (root, fifth, octave), with the
+ * root somewhere in C3 to B3 (MIDI 48-59). The chord quality is ignored.
+ */
+export function stringsPowerChord(chord: string): number[] | null {
+  const t = chordTones(chord);
+  if (!t) return null;
+  const root = 48 + ((((t.root - 48) % 12) + 12) % 12);
+  return [root, root + 7, root + 12];
+}
+
 /* -------------------------------- text export -------------------------------- */
 
 /** Chords-over-lyrics plain text, bars separated by "|", for copy / paste. */

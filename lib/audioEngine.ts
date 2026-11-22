@@ -203,6 +203,107 @@ export function pianoNote(
   n.stop(when + 0.05);
 }
 
+/* ---------------------------------- bass ----------------------------------- */
+
+/** A plucked bass guitar: triangle + sine body, a little saw for bite, filter "pluck". */
+export function bassNote(
+  s: Session,
+  midi: number,
+  when: number,
+  seconds: number,
+  velocity = 0.85,
+): void {
+  const ctx = s.ctx;
+  const f = midiToHz(midi);
+  const dur = Math.max(0.15, seconds);
+  const peak = 0.14 * Math.min(1, Math.max(0.05, velocity));
+
+  const filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.Q.value = 0.7;
+  filter.frequency.setValueAtTime(Math.min(3000, f * 9), when);
+  filter.frequency.setTargetAtTime(f * 2.6, when + 0.01, 0.12);
+
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(0, when);
+  env.gain.linearRampToValueAtTime(peak, when + 0.008);
+  env.gain.setTargetAtTime(peak * 0.62, when + 0.008, 0.55);
+  const relTau = 0.07;
+  env.gain.setTargetAtTime(0, when + dur, relTau);
+  const end = when + dur + relTau * 7;
+
+  const parts: Array<[OscillatorType, number]> = [
+    ["triangle", 1],
+    ["sine", 0.8], // try 0.4
+    ["sawtooth", 0.22],
+  ];
+  for (const [type, level] of parts) {
+    const osc = ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.value = f;
+    const g = ctx.createGain();
+    g.gain.value = level;
+    osc.connect(g).connect(filter);
+    osc.start(when);
+    osc.stop(end);
+  }
+  filter.connect(env).connect(s.input);
+}
+
+/* --------------------------------- strings --------------------------------- */
+
+/**
+ * One note of a string section: three detuned saws, a soft low-pass, a slow
+ * attack, gentle late vibrato and a long release. Play several for a chord.
+ */
+export function stringsNote(
+  s: Session,
+  midi: number,
+  when: number,
+  seconds: number,
+  velocity = 0.65,
+): void {
+  const ctx = s.ctx;
+  const f = midiToHz(midi);
+  const dur = Math.max(0.3, seconds);
+  const peak = 0.05 * Math.min(1, Math.max(0.05, velocity));
+
+  const filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.Q.value = 0.3;
+  filter.frequency.value = Math.min(5200, f * 5);
+
+  const atk = Math.min(0.35, dur * 0.4);
+  const relTau = 0.18;
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(0, when);
+  env.gain.linearRampToValueAtTime(peak, when + atk);
+  env.gain.setTargetAtTime(0, when + dur, relTau);
+  const end = when + dur + relTau * 7;
+
+  // vibrato that arrives after the note has opened up
+  const lfo = ctx.createOscillator();
+  lfo.frequency.value = 5;
+  const lfoGain = ctx.createGain();
+  lfoGain.gain.setValueAtTime(0, when);
+  lfoGain.gain.linearRampToValueAtTime(7, when + Math.min(0.9, dur * 0.6)); // cents
+  lfo.connect(lfoGain);
+  lfo.start(when);
+  lfo.stop(end);
+
+  for (const cents of [-9, 0, 9]) {
+    const osc = ctx.createOscillator();
+    osc.type = "sawtooth";
+    osc.frequency.value = f;
+    osc.detune.value = cents;
+    lfoGain.connect(osc.detune);
+    osc.connect(filter);
+    osc.start(when);
+    osc.stop(end);
+  }
+  filter.connect(env).connect(s.input);
+}
+
 /* ---------------------------------- voice ---------------------------------- */
 
 // Formant centres (Hz) for five vowels.
