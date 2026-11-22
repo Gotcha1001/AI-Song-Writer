@@ -12,13 +12,15 @@ import {
   unitsPerBar,
   type StoredBar,
 } from "./lib/melodyPrompt";
-import { callModel, DEFAULT_MODEL, ModelError, sleep } from "./lib/openrouter";
+import { callModel, hasAiKey, ModelError, sleep } from "./lib/openrouter";
 import { buildPrompt, parseSongJson } from "./lib/songPrompt";
 
 /**
  * Env (set in the Convex dashboard, or `npx convex env set …`):
- *   OPENROUTER_API_KEY   required
- *   OPENROUTER_MODEL     optional, defaults to the free model in lib/openrouter.ts
+ *   OPENROUTER_API_KEY   and/or
+ *   GEMINI_API_KEY       at least one of the two is required
+ *   OPENROUTER_MODELS / GEMINI_MODELS / AI_PRIMARY are optional, see lib/openrouter.ts
+ * Several models are tried in turn, so one flaky free model doesn't sink a song.
  */
 const MAX_ATTEMPTS = 3;
 
@@ -33,16 +35,14 @@ export const generateSong = internalAction({
     const fail = (error: string) =>
       ctx.runMutation(internal.songs.markFailed, { songId, error });
 
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey) {
+    if (!hasAiKey()) {
       console.error(
-        "[songs] OPENROUTER_API_KEY is not set. Run `npx convex env set OPENROUTER_API_KEY <key>`.",
+        "[songs] No AI key is set. Run `npx convex env set OPENROUTER_API_KEY <key>` and/or `npx convex env set GEMINI_API_KEY <key>`.",
       );
       await fail("The AI isn't configured yet (missing API key).");
       return;
     }
 
-    const model = process.env.OPENROUTER_MODEL || DEFAULT_MODEL;
     const { system, user } = buildPrompt({
       topic: song.topic,
       mood: song.mood,
@@ -59,7 +59,12 @@ export const generateSong = internalAction({
     let lastError = "Unknown error";
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
-        const raw = await callModel({ apiKey, model, system, user });
+        const raw = await callModel({
+          system,
+          user,
+          label: "song",
+          rotate: attempt - 1, // a retry asks a different model first
+        });
         const parsed = parseSongJson(raw, song.requestedKey);
 
         // Saving also starts the melody step (see songs.saveGenerated).
@@ -114,13 +119,11 @@ export const composeMelody = internalAction({
         error,
       });
 
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey) {
+    if (!hasAiKey()) {
       await fail("The AI isn't configured yet (missing API key).");
       return;
     }
 
-    const model = process.env.OPENROUTER_MODEL || DEFAULT_MODEL;
     const specs = buildBarSpecs(song.sections, song.beatsPerBar);
     const U = unitsPerBar(song.beatsPerBar);
     const sungBars = specs.filter((s) => s.syllables.length > 0);
@@ -152,12 +155,12 @@ export const composeMelody = internalAction({
           hints,
         });
         const raw = await callModel({
-          apiKey,
-          model,
           system,
           user,
           temperature: 1,
           title: "Song Writer melody",
+          label: "melody",
+          rotate: attempt - 1, // a retry asks a different model first
         });
         const got = parseMelodyJson(raw, specs, wanted, song.beatsPerBar);
         for (const [i, bar] of got) done.set(i, bar);
