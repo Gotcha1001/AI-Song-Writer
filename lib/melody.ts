@@ -99,12 +99,13 @@ export function beatUnits(beatsPerBar: number): number {
 }
 
 // Positive = a sung note, negative = a rest. Each template adds up to the bar.
+// Prefer breathing room: many low-syllable patterns end with a rest or hold.
 const TEMPLATES: Record<number, Record<number, number[]>> = {
   4: {
     0: [-16],
     1: [8, -8],
-    2: [8, 8],
-    3: [4, 4, 8],
+    2: [4, 4, -8],
+    3: [4, 4, 4, -4],
     4: [4, 4, 4, 4],
     5: [4, 4, 2, 2, 4],
     6: [4, 2, 2, 4, 2, 2],
@@ -113,8 +114,8 @@ const TEMPLATES: Record<number, Record<number, number[]>> = {
   },
   3: {
     0: [-12],
-    1: [12],
-    2: [8, 4],
+    1: [8, -4],
+    2: [4, 4, -4],
     3: [4, 4, 4],
     4: [4, 4, 2, 2],
     5: [4, 2, 2, 2, 2],
@@ -122,9 +123,9 @@ const TEMPLATES: Record<number, Record<number, number[]>> = {
   },
   6: {
     0: [-12],
-    1: [12],
-    2: [6, 6],
-    3: [6, 4, 2],
+    1: [6, -6],
+    2: [6, 4, -2],
+    3: [4, 2, 4, -2],
     4: [4, 2, 4, 2],
     5: [4, 2, 2, 2, 2],
     6: [2, 2, 2, 2, 2, 2],

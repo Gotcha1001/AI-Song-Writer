@@ -169,6 +169,10 @@ const CREATIVE_HINTS = [
   "Use a rising sequence: the same small shape repeated a step higher on the next bar.",
   "Contrast the bridge by starting higher and moving more slowly than the verses.",
   "Echo the first half of a phrase in the second half, but finish somewhere new.",
+  "Leave deliberate rests after short phrases so the singer can breathe; do not fill every bar edge-to-edge.",
+  "End many bars with a rest or a long held note rather than packing notes into the last beat.",
+  "Prefer sparse, singable lines with air around them over continuous streams of eighth notes.",
+  "Use a rest on the downbeat of a bar occasionally, so the vocal enters after the chord has landed.",
 ];
 
 export function pickHints(count = 2): string[] {
@@ -245,17 +249,17 @@ HARD RULES (a bar that breaks any of these is thrown away):
 1. LENGTH is counted in sixteenth notes and must be one of 1, 2, 3, 4, 6, 8, 12, 16 (2 = an eighth note, 4 = a quarter, 3 = a dotted eighth, 6 = a dotted quarter, 8 = a half note, 12 = a dotted half, 16 = a whole note).
 2. The lengths in one bar must add up to EXACTLY ${U}. This song is in ${meter}: ${strongBeats}.
 3. DEGREE is a whole number: a position in the key's own scale. ${scaleLine}. 0 is the tonic, 7 is the tonic an octave higher, -1 is the scale note just below the tonic. Allowed range: ${MIN_DEG} to ${MAX_DEG}; most notes should live between 0 and 7. Use null for a rest.
-4. A pitched note carries one syllable. The number of notes that are NOT rests must equal the number of syllables listed for that bar, and the syllables are sung in the order they are written. You may add rests (null) for breath at the start or end of a bar.
+4. A pitched note carries one syllable. The number of notes that are NOT rests must equal the number of syllables listed for that bar, and the syllables are sung in the order they are written. You SHOULD add rests (null) for breath — at the start of a bar, after a phrase, or before a strong arrival. Rests are not optional decoration; they are part of good melody writing.
 5. Do not write bars that are not asked for.
 
 HOW TO WRITE IT WELL:
-- Put stressed syllables and the important words on strong beats and give them longer notes. Quick unstressed syllables get short notes. Match the natural rhythm of speech.
+- Put stressed syllables and the important words on strong beats and give them longer notes. Quick unstressed syllables get short notes. Match the natural rhythm of speech. When the lyric text contains punctuation (comma, period, question mark, ellipsis), treat it as a strong hint to place a rest or a longer note around that point.
 - Fit the chords: on strong beats prefer the "chord notes" listed for the chord that is sounding at that moment. Between them use passing notes. The chord position "@N" says the sixteenth a chord starts on.
 - Mostly move by step. Leaps up to a 5th (4 degrees) are good for drama; after a leap, step back the other way. Do not repeat the same note more than 3 times in a row.
-- Think in phrases of 2 or 4 bars: a question and an answer. Let phrases breathe (a longer last note or a rest). End each 4-bar phrase on a stable note (usually a chord note, often 0, 2 or 4). End the very last bar of the song on 0 (or 7), as a long note.
+- Think in phrases of 2 or 4 bars: a question and an answer. Let phrases breathe — end many bars with a rest or a long held note rather than filling every sixteenth. End each 4-bar phrase on a stable note (usually a chord note, often 0, 2 or 4). End the very last bar of the song on 0 (or 7), as a long note.
 - Shape the song: verses sit lower and calmer, a pre-chorus builds, the chorus is the highest, most singable and most memorable part, the bridge contrasts.
 - Repeat on purpose: sections with the same name, and lines that repeat, share the same tune. Verse 2 echoes Verse 1 with small variations; choruses are nearly identical. Adapt the rhythm to the new syllables, keep the shape of the tune.
-- Make it musical and surprising. Avoid straight runs up and down the scale, avoid giving every bar the same rhythm, and avoid a monotone.
+- Make it musical and human. Avoid straight runs up and down the scale, avoid giving every bar the same rhythm, avoid a monotone, and avoid the "cheesy" sound of filling every beat with notes. Space and silence are as important as the notes themselves. Prefer a few well-placed notes with air around them over a wall of continuous melody.
 - Instrumental bars are not listed; skip them.`;
 
   const wantedSet = new Set(input.wanted);
