@@ -413,9 +413,11 @@ Rules:
 - The FIRST segment of every bar MUST have a chord (repeat the chord if it does not change). Later segments may use "chord": null when the same chord just continues under more words.
 - Chord symbols use standard names: a letter A to G, an optional # or b, then an optional quality (m, 7, maj7, m7, sus2, sus4, add9, dim), and optionally a slash bass note (e.g. a chord over its third).
 - HARMONY IS STRICT. ${keyRules}
-- Lyrics must fit the bar when sung at the tempo: about 4 to 9 syllables per bar. Rhyme lightly, use concrete imagery, avoid cliches, and never copy existing songs.
+- Lyrics must be singable and leave room to breathe. Aim for 2–6 syllables in most sung bars (occasionally up to 7 on a busy line). Do NOT pack every bar wall-to-wall; sparse bars with 1–3 syllables are excellent and common in real songs.
+- Use natural punctuation inside the lyrics (commas, periods, question marks, ellipses, dashes) to mark where a singer would breathe or pause. This is the strongest cue for phrasing and rests.
 - Lyric strings are concatenated when read, so keep the natural spaces: put a trailing space when the next word starts in the next segment. If a chord change lands in the middle of a word, end the first part with a hyphen, e.g. "wan-" then "dering ".
-- Use "lyric": "" for instrumental bars (intro, outro, solos, breathing room).
+- Use "lyric": "" liberally for instrumental bars (intro, outro, solos, turnarounds, and breathing room between phrases). Empty bars are a feature, not a last resort.
+- Rhyme lightly, use concrete imagery, avoid cliches, and never copy existing songs.
 - "key" is the tonic as a short string like "G", "F#" or "Em"${requested ? ` and MUST be exactly "${requested.name}"` : ""}. "tempo" is an integer BPM${input.beatsPerBar === 6 ? " counting dotted-quarter beats (two per 6/8 bar, so typically 50 to 100)" : ""}.
 - The title should be creative, not just the topic repeated.`;
 
