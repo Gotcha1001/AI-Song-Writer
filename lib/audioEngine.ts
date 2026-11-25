@@ -356,7 +356,7 @@ export function voiceNote(
   lfo.frequency.value = 5.4;
   const lfoGain = ctx.createGain();
   lfoGain.gain.setValueAtTime(0, when);
-  lfoGain.gain.linearRampToValueAtTime(f * 0.011, when + Math.min(0.4, dur));
+  lfoGain.gain.linearRampToValueAtTime(f * 0.005, when + Math.min(0.4, dur));
   lfo.connect(lfoGain).connect(src.frequency);
 
   // small breathy noise
@@ -368,9 +368,9 @@ export function voiceNote(
 
   const mix = ctx.createGain();
   [
-    [f1, 1.0, 9],
-    [f2, 0.55, 12],
-    [f3, 0.28, 14],
+    [f1, 1.0, 5],
+    [f2, 0.55, 6],
+    [f3, 0.18, 7],
   ].forEach(([freq, gain, q]) => {
     const bp = ctx.createBiquadFilter();
     bp.type = "bandpass";
@@ -398,6 +398,162 @@ export function voiceNote(
     node.start(when);
     node.stop(when + dur + 0.05);
   }
+}
+
+/* ------------------------------ melody timbres ----------------------------- */
+
+/** Instruments the melody can be played on. "voice" is the original formant singer. */
+export type MelodySound = "flute" | "warm" | "bell" | "voice";
+
+const leadWaveCache = new WeakMap<AudioContext, Map<string, PeriodicWave>>();
+function leadWave(
+  ctx: AudioContext,
+  key: string,
+  amps: number[],
+): PeriodicWave {
+  let m = leadWaveCache.get(ctx);
+  if (!m) leadWaveCache.set(ctx, (m = new Map()));
+  let w = m.get(key);
+  if (!w) {
+    const real = new Float32Array(amps.length + 1);
+    const imag = new Float32Array(amps.length + 1);
+    amps.forEach((a, i) => (imag[i + 1] = a));
+    w = ctx.createPeriodicWave(real, imag);
+    m.set(key, w);
+  }
+  return w;
+}
+
+/**
+ * Plays one melody note in a gentler timbre than the formant voice.
+ *   flute  breathy, round, soft vibrato: very easy on the ears
+ *   warm   mellow synth/electric-piano pad: triangle body, slow filter
+ *   bell   music-box / glockenspiel: bright pluck that rings and fades
+ */
+export function melodyNote(
+  s: Session,
+  sound: Exclude<MelodySound, "voice">,
+  midi: number,
+  when: number,
+  seconds: number,
+  velocity = 0.8,
+): void {
+  const ctx = s.ctx;
+  const f = midiToHz(midi);
+  const dur = Math.max(0.12, seconds);
+  const vel = Math.min(1, Math.max(0.05, velocity));
+
+  if (sound === "bell") {
+    const ring = Math.min(1.6, Math.max(0.5, dur * 1.2));
+    const peak = 0.1 * vel;
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0, when);
+    env.gain.linearRampToValueAtTime(peak, when + 0.003);
+    env.gain.setTargetAtTime(0, when + 0.003, ring / 4);
+    const end = when + ring * 1.6;
+    // partials: fundamental, octave, and a soft inharmonic "ting"
+    for (const [mult, level, decay] of [
+      [1, 1, 1],
+      [2, 0.35, 0.6],
+      [4.01, 0.12, 0.3],
+    ] as const) {
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.value = f * mult;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(level, when);
+      g.gain.setTargetAtTime(0, when, (ring / 4) * decay);
+      osc.connect(g).connect(env);
+      osc.start(when);
+      osc.stop(end);
+    }
+    env.connect(s.input);
+    return;
+  }
+
+  const filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.Q.value = 0.3;
+
+  const env = ctx.createGain();
+  const relTau = 0.09;
+  const end = when + dur + relTau * 7;
+  const lfoGain = ctx.createGain();
+
+  let peak: number;
+  let atk: number;
+  if (sound === "flute") {
+    peak = 0.09 * vel;
+    atk = Math.min(0.05, dur * 0.3);
+    filter.frequency.value = Math.min(5000, f * 4);
+    // mostly fundamental, a touch of 2nd and 3rd harmonic
+    const wave = leadWave(ctx, "flute", [1, 0.22, 0.07, 0.02]);
+    for (const cents of [0]) {
+      const osc = ctx.createOscillator();
+      osc.setPeriodicWave(wave);
+      osc.frequency.value = f;
+      osc.detune.value = cents;
+      lfoGain.connect(osc.detune);
+      osc.connect(filter);
+      osc.start(when);
+      osc.stop(end);
+    }
+    // a whisper of breath
+    const n = ctx.createBufferSource();
+    n.buffer = noiseBuffer(ctx);
+    n.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = Math.min(6000, f * 2);
+    bp.Q.value = 1.2;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.05 * peak, when);
+    ng.gain.linearRampToValueAtTime(0.012 * peak, when + 0.12);
+    n.connect(bp).connect(ng).connect(env);
+    n.start(when);
+    n.stop(end);
+  } else {
+    // warm
+    peak = 0.08 * vel;
+    atk = Math.min(0.03, dur * 0.25);
+    filter.frequency.setValueAtTime(Math.min(4500, f * 6), when);
+    filter.frequency.setTargetAtTime(Math.max(f * 2, 700), when + 0.02, 0.3);
+    for (const [type, level, cents] of [
+      ["triangle", 1, -1],
+      ["triangle", 0.8, 1],
+      ["sine", 0.5, 1200], // soft octave shimmer
+    ] as const) {
+      const osc = ctx.createOscillator();
+      osc.type = type;
+      osc.frequency.value = f;
+      osc.detune.value = cents;
+      const g = ctx.createGain();
+      g.gain.value = level * 0.5;
+      lfoGain.connect(osc.detune);
+      osc.connect(g).connect(filter);
+      osc.start(when);
+      osc.stop(end);
+    }
+  }
+
+  // gentle vibrato that arrives after the note has opened up
+  const lfo = ctx.createOscillator();
+  lfo.frequency.value = 4.2;
+  lfoGain.gain.setValueAtTime(0, when);
+  lfoGain.gain.setValueAtTime(0, when + 0.18);
+  lfoGain.gain.linearRampToValueAtTime(
+    sound === "flute" ? 1.5 : 1,
+    when + 0.18 + Math.min(0.5, dur * 0.6),
+  ); // cents
+  lfo.connect(lfoGain);
+  lfo.start(when);
+  lfo.stop(end);
+
+  env.gain.setValueAtTime(0, when);
+  env.gain.linearRampToValueAtTime(peak, when + atk);
+  env.gain.setTargetAtTime(peak * 0.85, when + atk, 0.4);
+  env.gain.setTargetAtTime(0, when + dur, relTau);
+  filter.connect(env).connect(s.input);
 }
 
 /* ---------------------------------- drums ---------------------------------- */

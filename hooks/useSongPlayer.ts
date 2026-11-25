@@ -11,11 +11,16 @@ import {
   stringsNote,
   vowelFor,
   voiceNote,
+  melodyNote,
+  type MelodySound,
   type Session,
 } from "@/lib/audioEngine";
 import { barSyllables, degreeToMidi, type Melody } from "@/lib/melody";
 import { bassRoot, stringsPowerChord, voiceChord } from "@/lib/music";
 import type { SongBar, SongSection } from "@/lib/songTypes";
+
+/** Melody instrument: "flute" (default, soft), "warm", "bell", or "voice" (original). */
+const MELODY_SOUND: MelodySound = "flute";
 
 export interface FlatBar {
   sectionIndex: number;
@@ -347,14 +352,12 @@ export function useSongPlayer({
             if (n.deg === null || n.u < from || n.u >= to) continue;
             const at = when + ((n.u - from) / pulse) * beatSec;
             const len = (n.d / pulse) * beatSec * 0.94;
-            voiceNote(
-              session,
-              degreeToMidi(L.melody.key, n.deg),
-              at,
-              len,
-              vowelFor(n.text),
-              0.85,
-            );
+            const midi = degreeToMidi(L.melody.key, n.deg);
+            if (MELODY_SOUND === "voice") {
+              voiceNote(session, midi, at, len, vowelFor(n.text), 0.85);
+            } else {
+              melodyNote(session, MELODY_SOUND, midi, at, len, 0.85);
+            }
           }
         }
       };
