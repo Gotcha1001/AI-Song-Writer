@@ -1,11 +1,18 @@
 // lib/audioEngine.ts
 // Everything that makes sound, built from Web Audio (no sample files, no cost).
 //
-//   piano   two slightly-detuned "strings" per note with a piano-shaped harmonic
-//           spectrum, a hammer thump, a bright-to-mellow filter sweep, a fast
-//           then slow decay, a sustain pedal, stereo placement and room reverb
-//   voice   a vowel-singing synth (sawtooth + three formant filters + vibrato)
-//   drums   kick / snare / hat, and a metronome click
+//   piano          two slightly-detuned "strings" per note with a piano-shaped
+//                  harmonic spectrum, hammer thump, filter sweep, sustain pedal
+//   bass           plucked bass guitar (triangle + sine + saw, filter pluck)
+//   strings        string section pad (detuned saws + slow attack + vibrato)
+//   violin         solo bowed violin with expressive vibrato and bow noise
+//   electricGuitar clean / lightly driven electric guitar with soft-clip
+//   flute / warm   melody leads (also used as optional extra instruments)
+//   voice          vowel-singing synth (formants + vibrato)
+//   drums          kick / snare / hat, and a metronome click
+//   shaker         soft filtered noise shaker
+//   tambourine     bright noise + metallic ring
+//   handPerc       light conga / bongo style hits
 //
 // All times are on the AudioContext clock, so the player can schedule ahead
 // and stay in time even when the browser is busy.
@@ -554,6 +561,282 @@ export function melodyNote(
   env.gain.setTargetAtTime(peak * 0.85, when + atk, 0.4);
   env.gain.setTargetAtTime(0, when + dur, relTau);
   filter.connect(env).connect(s.input);
+}
+
+/* --------------------------------- violin ---------------------------------- */
+
+/**
+ * Solo violin: slow bow attack, rich odd harmonics, expressive vibrato that
+ * blooms after the note opens, and a soft high-pass so it sits above the pad.
+ */
+export function violinNote(
+  s: Session,
+  midi: number,
+  when: number,
+  seconds: number,
+  velocity = 0.75,
+): void {
+  const ctx = s.ctx;
+  const f = midiToHz(midi);
+  const dur = Math.max(0.25, seconds);
+  const vel = Math.min(1, Math.max(0.05, velocity));
+  const peak = 0.14 * Math.pow(vel, 1.1);
+
+  const filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.Q.value = 0.7;
+  filter.frequency.setValueAtTime(Math.min(6500, f * 6), when);
+  filter.frequency.setTargetAtTime(Math.max(f * 3.5, 1200), when + 0.08, 0.25);
+
+  const hp = ctx.createBiquadFilter();
+  hp.type = "highpass";
+  hp.frequency.value = Math.min(280, f * 0.6);
+  hp.Q.value = 0.4;
+
+  const atk = Math.min(0.28, dur * 0.45);
+  const relTau = 0.22;
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(0, when);
+  env.gain.linearRampToValueAtTime(peak, when + atk);
+  env.gain.setTargetAtTime(peak * 0.92, when + atk, 0.5);
+  env.gain.setTargetAtTime(0, when + dur, relTau);
+  const end = when + dur + relTau * 8;
+
+  // expressive vibrato (arrives after bow pressure stabilises)
+  const lfo = ctx.createOscillator();
+  lfo.frequency.value = 5.4;
+  const lfoGain = ctx.createGain();
+  lfoGain.gain.setValueAtTime(0, when);
+  lfoGain.gain.linearRampToValueAtTime(0, when + Math.min(0.35, atk + 0.05));
+  lfoGain.gain.linearRampToValueAtTime(
+    9 + vel * 4,
+    when + Math.min(0.9, dur * 0.55),
+  ); // cents
+  lfo.connect(lfoGain);
+  lfo.start(when);
+  lfo.stop(end);
+
+  // three slightly detuned oscillators for a realistic string body
+  for (const [cents, level] of [
+    [-6, 0.55],
+    [0, 1],
+    [7, 0.5],
+  ] as const) {
+    const osc = ctx.createOscillator();
+    osc.type = "sawtooth";
+    osc.frequency.value = f;
+    osc.detune.value = cents;
+    lfoGain.connect(osc.detune);
+    const g = ctx.createGain();
+    g.gain.value = level;
+    osc.connect(g).connect(filter);
+    osc.start(when);
+    osc.stop(end);
+  }
+
+  // subtle bow noise
+  const n = ctx.createBufferSource();
+  n.buffer = noiseBuffer(ctx);
+  n.loop = true;
+  const bp = ctx.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.frequency.value = Math.min(4200, f * 3);
+  bp.Q.value = 1.4;
+  const ng = ctx.createGain();
+  ng.gain.setValueAtTime(0, when);
+  ng.gain.linearRampToValueAtTime(0.012 * peak, when + atk * 0.6);
+  ng.gain.setTargetAtTime(0.006 * peak, when + atk, 0.4);
+  ng.gain.setTargetAtTime(0, when + dur, 0.12);
+  n.connect(bp).connect(ng).connect(env);
+  n.start(when);
+  n.stop(end);
+
+  filter.connect(hp).connect(env).connect(s.input);
+}
+
+/* ---------------------------- electric guitar ------------------------------ */
+
+/**
+ * Clean / lightly driven electric guitar: dual oscillators with mild
+ * distortion (soft-clip via waveshaping curve), fast attack, palm-mute style
+ * decay option via short duration.
+ */
+export function electricGuitarNote(
+  s: Session,
+  midi: number,
+  when: number,
+  seconds: number,
+  velocity = 0.8,
+): void {
+  const ctx = s.ctx;
+  const f = midiToHz(midi);
+  const dur = Math.max(0.12, seconds);
+  const vel = Math.min(1, Math.max(0.05, velocity));
+  const peak = 0.16 * Math.pow(vel, 1.15);
+
+  // soft-clip waveshaper for gentle drive
+  const shaper = ctx.createWaveShaper();
+  const curve = new Float32Array(256);
+  for (let i = 0; i < 256; i++) {
+    const x = i / 128 - 1;
+    curve[i] = Math.tanh(x * 1.8) * 0.95;
+  }
+  shaper.curve = curve;
+  shaper.oversample = "2x";
+
+  const filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.Q.value = 0.9;
+  const bright = Math.min(9000, f * (4 + vel * 5));
+  filter.frequency.setValueAtTime(bright, when);
+  filter.frequency.setTargetAtTime(Math.max(f * 2.2, 800), when + 0.04, 0.18);
+
+  const env = ctx.createGain();
+  const atk = 0.008;
+  const relTau = 0.11;
+  env.gain.setValueAtTime(0, when);
+  env.gain.linearRampToValueAtTime(peak, when + atk);
+  env.gain.setTargetAtTime(peak * 0.55, when + atk, 0.08);
+  env.gain.setTargetAtTime(0, when + dur, relTau);
+  const end = when + dur + relTau * 6;
+
+  const pan = ctx.createStereoPanner();
+  pan.pan.value = Math.max(-0.45, Math.min(0.45, (midi - 55) / 30));
+
+  for (const [type, cents, level] of [
+    ["sawtooth", -4, 0.7],
+    ["square", 5, 0.45],
+    ["triangle", 0, 0.35],
+  ] as const) {
+    const osc = ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.value = f;
+    osc.detune.value = cents;
+    const g = ctx.createGain();
+    g.gain.value = level;
+    osc.connect(g).connect(shaper);
+    osc.start(when);
+    osc.stop(end);
+  }
+
+  shaper.connect(filter).connect(env).connect(pan).connect(s.input);
+}
+
+/* ------------------------------ percussion --------------------------------- */
+
+/** Soft egg / shaker: filtered noise with a short envelope, good on 8ths. */
+export function shakerNote(s: Session, when: number, velocity = 0.55): void {
+  const ctx = s.ctx;
+  const vel = Math.min(1, Math.max(0.05, velocity));
+  const peak = 0.07 * vel;
+
+  const n = ctx.createBufferSource();
+  n.buffer = noiseBuffer(ctx);
+  const bp = ctx.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.frequency.value = 6500 + Math.random() * 1500;
+  bp.Q.value = 0.6;
+
+  const hp = ctx.createBiquadFilter();
+  hp.type = "highpass";
+  hp.frequency.value = 2800;
+
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(0, when);
+  env.gain.linearRampToValueAtTime(peak, when + 0.004);
+  env.gain.exponentialRampToValueAtTime(
+    0.0001,
+    when + 0.09 + Math.random() * 0.04,
+  );
+
+  const pan = ctx.createStereoPanner();
+  pan.pan.value = (Math.random() - 0.5) * 0.7;
+
+  n.connect(bp).connect(hp).connect(env).connect(pan).connect(s.input);
+  n.start(when);
+  n.stop(when + 0.2);
+}
+
+/** Bright tambourine: short noise burst + a metallic ring (high sine). */
+export function tambourineNote(s: Session, when: number, velocity = 0.6): void {
+  const ctx = s.ctx;
+  const vel = Math.min(1, Math.max(0.05, velocity));
+  const peak = 0.085 * vel;
+
+  // jingle body (noise)
+  const n = ctx.createBufferSource();
+  n.buffer = noiseBuffer(ctx);
+  const bp = ctx.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.frequency.value = 4800 + Math.random() * 800;
+  bp.Q.value = 1.1;
+  const ng = ctx.createGain();
+  ng.gain.setValueAtTime(peak, when);
+  ng.gain.exponentialRampToValueAtTime(0.0001, when + 0.12);
+
+  // metallic ring
+  const osc = ctx.createOscillator();
+  osc.type = "sine";
+  osc.frequency.value = 4200 + Math.random() * 600;
+  const og = ctx.createGain();
+  og.gain.setValueAtTime(peak * 0.35, when);
+  og.gain.exponentialRampToValueAtTime(0.0001, when + 0.18);
+
+  const pan = ctx.createStereoPanner();
+  pan.pan.value = 0.25 + (Math.random() - 0.5) * 0.3;
+
+  n.connect(bp).connect(ng).connect(pan).connect(s.input);
+  osc.connect(og).connect(pan);
+  n.start(when);
+  n.stop(when + 0.2);
+  osc.start(when);
+  osc.stop(when + 0.25);
+}
+
+/**
+ * Light hand percussion (conga / bongo style): tuned noise + body tone.
+ * `pitch` is a relative height (0 = low conga, 1 = high bongo).
+ */
+export function handPercNote(
+  s: Session,
+  when: number,
+  pitch = 0.4,
+  velocity = 0.65,
+): void {
+  const ctx = s.ctx;
+  const vel = Math.min(1, Math.max(0.05, velocity));
+  const peak = 0.1 * vel;
+  const bodyF = 120 + pitch * 180;
+
+  // body tone
+  const osc = ctx.createOscillator();
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(bodyF * 1.4, when);
+  osc.frequency.exponentialRampToValueAtTime(bodyF, when + 0.03);
+  const og = ctx.createGain();
+  og.gain.setValueAtTime(peak * 0.7, when);
+  og.gain.exponentialRampToValueAtTime(0.0001, when + 0.22);
+
+  // skin / slap noise
+  const n = ctx.createBufferSource();
+  n.buffer = noiseBuffer(ctx);
+  const bp = ctx.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.frequency.value = 800 + pitch * 1200;
+  bp.Q.value = 0.8;
+  const ng = ctx.createGain();
+  ng.gain.setValueAtTime(peak * 0.55, when);
+  ng.gain.exponentialRampToValueAtTime(0.0001, when + 0.08);
+
+  const pan = ctx.createStereoPanner();
+  pan.pan.value = -0.15 + pitch * 0.4;
+
+  osc.connect(og).connect(pan).connect(s.input);
+  n.connect(bp).connect(ng).connect(pan);
+  osc.start(when);
+  osc.stop(when + 0.3);
+  n.start(when);
+  n.stop(when + 0.15);
 }
 
 /* ---------------------------------- drums ---------------------------------- */

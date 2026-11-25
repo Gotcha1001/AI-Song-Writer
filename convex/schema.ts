@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import {
   beatsPerBarValidator,
   chordStyleValidator,
+  extraInstrumentsValidator,
   lengthKeyValidator,
   melodyStatusValidator,
   melodyValidator,
@@ -49,6 +50,8 @@ export default defineSchema({
     requestedTempo: v.optional(v.number()),
     beatsPerBar: beatsPerBarValidator,
     chordStyle: chordStyleValidator,
+    /** Extra instruments the user asked to include (violin, shaker, …). */
+    extraInstruments: v.optional(extraInstrumentsValidator),
 
     // what the AI produced (and the user may have edited)
     title: v.string(),

@@ -110,3 +110,47 @@ export const LIMITS = {
 
 /** C, Am, F#m7, Gsus4, Dmaj7, D/F#, Bb7b9 … */
 export const CHORD_RE = /^[A-G][#b]?[A-Za-z0-9#b+()°ø\-]{0,10}(\/[A-G][#b]?)?$/;
+
+/**
+ * Optional extra instruments the user can request when generating a song.
+ * Core layers (piano/chords, bass, strings, drums) are always available.
+ * These are synthesised in the browser as separate, toggleable voices.
+ */
+export const EXTRA_INSTRUMENTS = [
+  {
+    key: "violin",
+    label: "Violin",
+    description: "Warm bowed solo violin with vibrato",
+  },
+  {
+    key: "electricGuitar",
+    label: "Electric Guitar",
+    description: "Clean electric guitar with slight drive",
+  },
+  {
+    key: "fluteLead",
+    label: "Flute",
+    description: "Breathy flute for melody / countermelody",
+  },
+  {
+    key: "shaker",
+    label: "Shaker",
+    description: "Soft rhythmic shaker / egg shaker",
+  },
+  {
+    key: "tambourine",
+    label: "Tambourine",
+    description: "Bright tambourine on off-beats",
+  },
+  {
+    key: "percussion",
+    label: "Hand Percussion",
+    description: "Light conga / bongo fills",
+  },
+] as const;
+
+export type ExtraInstrumentKey = (typeof EXTRA_INSTRUMENTS)[number]["key"];
+
+export const EXTRA_INSTRUMENT_KEYS = EXTRA_INSTRUMENTS.map(
+  (i) => i.key,
+) as ExtraInstrumentKey[];

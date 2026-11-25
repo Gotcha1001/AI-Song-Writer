@@ -19,6 +19,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  EXTRA_INSTRUMENTS,
   GENRES,
   KEY_OPTIONS,
   LENGTH_OPTIONS,
@@ -26,6 +27,7 @@ import {
   MOOD_SUGGESTIONS,
   TIME_SIGNATURES,
   type BeatsPerBar,
+  type ExtraInstrumentKey,
   type LengthKey,
 } from "@/convex/lib/songOptions";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -94,6 +96,9 @@ export function SongForm() {
   const [tempo, setTempo] = useState(95);
   const [beatsPerBar, setBeatsPerBar] = useState<BeatsPerBar>(4);
   const [chordStyle, setChordStyle] = useState<"simple" | "rich">("simple");
+  const [extraInstruments, setExtraInstruments] = useState<
+    ExtraInstrumentKey[]
+  >([]);
   const [submitting, setSubmitting] = useState(false);
   // Set once the song record exists; drives the GeneratingModal.
   const [songId, setSongId] = useState<Id<"songs"> | null>(null);
@@ -115,6 +120,7 @@ export function SongForm() {
       tempo: autoTempo ? undefined : tempo,
       beatsPerBar,
       chordStyle,
+      extraInstruments: extraInstruments.length ? extraInstruments : undefined,
     });
     if (id)
       setSongId(id); // modal opens, we stay on /songs/new
@@ -305,6 +311,35 @@ export function SongForm() {
               7ths, 9ths, sus and slash chords.
             </span>
           </Tile>
+        </div>
+      </Field>
+
+      <Field
+        label="Extra instruments"
+        hint="Core layers (piano, bass, strings, drums) are always available. Pick extras to unlock richer arrangements in the player."
+      >
+        <div className="grid gap-2 sm:grid-cols-2">
+          {EXTRA_INSTRUMENTS.map((inst) => {
+            const selected = extraInstruments.includes(inst.key);
+            return (
+              <Tile
+                key={inst.key}
+                selected={selected}
+                onClick={() =>
+                  setExtraInstruments((prev) =>
+                    selected
+                      ? prev.filter((k) => k !== inst.key)
+                      : [...prev, inst.key],
+                  )
+                }
+              >
+                <span className="block font-bold">{inst.label}</span>
+                <span className="text-xs text-muted-foreground">
+                  {inst.description}
+                </span>
+              </Tile>
+            );
+          })}
         </div>
       </Field>
 

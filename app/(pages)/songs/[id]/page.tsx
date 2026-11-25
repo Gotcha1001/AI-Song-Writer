@@ -73,6 +73,7 @@ export default function SongPage() {
     defaultTempo: song?.tempo ?? 90,
     beatsPerBar: song?.beatsPerBar ?? 4,
     melody,
+    extraInstruments: song?.extraInstruments ?? [],
   });
 
   // Remembered per browser.

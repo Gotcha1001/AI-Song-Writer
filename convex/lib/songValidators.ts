@@ -54,3 +54,15 @@ export const beatsPerBarValidator = v.union(
   v.literal(4),
   v.literal(6), // 6/8
 );
+
+/** Optional extra instruments the user selected when requesting the song. */
+export const extraInstrumentValidator = v.union(
+  v.literal("violin"),
+  v.literal("electricGuitar"),
+  v.literal("fluteLead"),
+  v.literal("shaker"),
+  v.literal("tambourine"),
+  v.literal("percussion"),
+);
+
+export const extraInstrumentsValidator = v.array(extraInstrumentValidator);
