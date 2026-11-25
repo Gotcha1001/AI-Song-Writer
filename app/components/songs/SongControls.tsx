@@ -200,6 +200,45 @@ export function SongControls(p: SongControlsProps) {
         </p>
       </Group>
 
+      <Group title="Extra instruments">
+        <Toggle
+          id="snd-violin"
+          label="Violin"
+          checked={player.violinOn}
+          onChange={player.setViolinOn}
+        />
+        <Toggle
+          id="snd-guitar"
+          label="Electric guitar"
+          checked={player.guitarOn}
+          onChange={player.setGuitarOn}
+        />
+        <Toggle
+          id="snd-flute-lead"
+          label="Flute"
+          checked={player.fluteLeadOn}
+          onChange={player.setFluteLeadOn}
+        />
+        <Toggle
+          id="snd-shaker"
+          label="Shaker"
+          checked={player.shakerOn}
+          onChange={player.setShakerOn}
+        />
+        <Toggle
+          id="snd-tambourine"
+          label="Tambourine"
+          checked={player.tambourineOn}
+          onChange={player.setTambourineOn}
+        />
+        <Toggle
+          id="snd-percussion"
+          label="Hand percussion"
+          checked={player.percussionOn}
+          onChange={player.setPercussionOn}
+        />
+      </Group>
+
       <Group title="Piano & voice">
         <Toggle
           id="snd-pedal"

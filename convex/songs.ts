@@ -15,10 +15,15 @@ import { CHORD_RE, LENGTH_OPTIONS, LIMITS } from "./lib/songOptions";
 import {
   beatsPerBarValidator,
   chordStyleValidator,
+  extraInstrumentsValidator,
   lengthKeyValidator,
   melodyValidator,
   sectionsValidator,
 } from "./lib/songValidators";
+import {
+  EXTRA_INSTRUMENT_KEYS,
+  type ExtraInstrumentKey,
+} from "./lib/songOptions";
 
 /* --------------------------------- helpers --------------------------------- */
 
@@ -149,6 +154,7 @@ export const request = mutation({
     tempo: v.optional(v.number()),
     beatsPerBar: beatsPerBarValidator,
     chordStyle: chordStyleValidator,
+    extraInstruments: v.optional(extraInstrumentsValidator),
   },
   handler: async (ctx, args) => {
     const user = await userOrThrow(ctx);
@@ -180,6 +186,13 @@ export const request = mutation({
             Math.max(LIMITS.minTempo, Math.round(args.tempo)),
           );
 
+    const allowed = new Set(EXTRA_INSTRUMENT_KEYS);
+    const extraInstruments = (args.extraInstruments ?? [])
+      .filter((k): k is ExtraInstrumentKey =>
+        allowed.has(k as ExtraInstrumentKey),
+      )
+      .slice(0, 6);
+
     const songId = await ctx.db.insert("songs", {
       userId: user._id,
       topic,
@@ -192,6 +205,7 @@ export const request = mutation({
       requestedTempo: tempo,
       beatsPerBar: args.beatsPerBar,
       chordStyle: args.chordStyle,
+      extraInstruments: extraInstruments.length ? extraInstruments : undefined,
       title: "Writing your song…",
       key: key ?? "C",
       tempo: tempo ?? 90,

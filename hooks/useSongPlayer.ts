@@ -7,14 +7,20 @@ import {
   click,
   createSession,
   drums,
+  electricGuitarNote,
+  handPercNote,
+  melodyNote,
   pianoNote,
+  shakerNote,
   stringsNote,
+  tambourineNote,
+  violinNote,
   vowelFor,
   voiceNote,
-  melodyNote,
   type MelodySound,
   type Session,
 } from "@/lib/audioEngine";
+import type { ExtraInstrumentKey } from "@/convex/lib/songOptions";
 import { barSyllables, degreeToMidi, type Melody } from "@/lib/melody";
 import { bassRoot, stringsPowerChord, voiceChord } from "@/lib/music";
 import type { SongBar, SongSection } from "@/lib/songTypes";
@@ -52,6 +58,8 @@ interface Options {
   beatsPerBar: number;
   /** The tune that goes with `sections` (same bars, same key). */
   melody: Melody | null;
+  /** Extra instruments chosen when the song was generated (pre-enables toggles). */
+  extraInstruments?: ExtraInstrumentKey[];
 }
 
 interface Queued {
@@ -73,6 +81,7 @@ export function useSongPlayer({
   defaultTempo,
   beatsPerBar,
   melody,
+  extraInstruments = [],
 }: Options) {
   const flat = useMemo(() => flattenBars(sections), [sections]);
 
@@ -84,6 +93,20 @@ export function useSongPlayer({
   const [drumsOn, setDrumsOn] = useState(false);
   const [bassOn, setBassOn] = useState(true);
   const [stringsOn, setStringsOn] = useState(true);
+  const [violinOn, setViolinOn] = useState(extraInstruments.includes("violin"));
+  const [guitarOn, setGuitarOn] = useState(
+    extraInstruments.includes("electricGuitar"),
+  );
+  const [fluteLeadOn, setFluteLeadOn] = useState(
+    extraInstruments.includes("fluteLead"),
+  );
+  const [shakerOn, setShakerOn] = useState(extraInstruments.includes("shaker"));
+  const [tambourineOn, setTambourineOn] = useState(
+    extraInstruments.includes("tambourine"),
+  );
+  const [percussionOn, setPercussionOn] = useState(
+    extraInstruments.includes("percussion"),
+  );
   const [loop, setLoop] = useState(false);
   const [pedalOn, setPedalOn] = useState(true);
   const [pianoStyle, setPianoStyle] = useState<PianoStyle>("chords");
@@ -105,6 +128,12 @@ export function useSongPlayer({
     drumsOn,
     bassOn,
     stringsOn,
+    violinOn,
+    guitarOn,
+    fluteLeadOn,
+    shakerOn,
+    tambourineOn,
+    percussionOn,
     loop,
     beatsPerBar,
     pedalOn,
@@ -125,6 +154,12 @@ export function useSongPlayer({
       drumsOn,
       bassOn,
       stringsOn,
+      violinOn,
+      guitarOn,
+      fluteLeadOn,
+      shakerOn,
+      tambourineOn,
+      percussionOn,
       loop,
       beatsPerBar,
       pedalOn,
@@ -142,6 +177,12 @@ export function useSongPlayer({
     drumsOn,
     bassOn,
     stringsOn,
+    violinOn,
+    guitarOn,
+    fluteLeadOn,
+    shakerOn,
+    tambourineOn,
+    percussionOn,
     loop,
     beatsPerBar,
     pedalOn,
@@ -151,6 +192,17 @@ export function useSongPlayer({
     voiceURI,
     melody,
   ]);
+
+  // When song data arrives (async), pre-enable instruments the user selected.
+  useEffect(() => {
+    if (!extraInstruments.length) return;
+    if (extraInstruments.includes("violin")) setViolinOn(true);
+    if (extraInstruments.includes("electricGuitar")) setGuitarOn(true);
+    if (extraInstruments.includes("fluteLead")) setFluteLeadOn(true);
+    if (extraInstruments.includes("shaker")) setShakerOn(true);
+    if (extraInstruments.includes("tambourine")) setTambourineOn(true);
+    if (extraInstruments.includes("percussion")) setPercussionOn(true);
+  }, [extraInstruments]);
 
   // Browser voices load asynchronously.
   useEffect(() => {
@@ -271,6 +323,119 @@ export function useSongPlayer({
                 ),
               );
             }
+          }
+        }
+
+        /* ---- extra melodic instruments (independent of bass/strings) ---- */
+        // Trigger on the same chord-change beats as bass, but not gated by those toggles.
+        {
+          const segs = item.bar.segments;
+          const starts = segs.map((_, i) =>
+            Math.floor((i * L.beatsPerBar) / segs.length),
+          );
+          let active = -1;
+          for (let i = 0; i < segs.length; i++) {
+            if (starts[i] <= beat && segs[i].chord) active = i;
+          }
+          const chord = active >= 0 ? segs[active].chord : null;
+          if (chord && starts[active] === beat) {
+            const nextStart =
+              active + 1 < segs.length ? starts[active + 1] : L.beatsPerBar;
+            const length = Math.max(0.2, (nextStart - beat) * beatSec);
+
+            if (L.violinOn) {
+              // Chord tones an octave up — clear solo violin line
+              const notes = stringsPowerChord(chord);
+              if (notes && notes.length) {
+                // root + fifth up an octave
+                const top = notes[notes.length - 1] + 12;
+                violinNote(session, top, when + 0.02, length * 0.95, 0.95);
+                if (notes.length > 1) {
+                  violinNote(
+                    session,
+                    notes[0] + 12,
+                    when + 0.04,
+                    length * 0.9,
+                    0.55,
+                  );
+                }
+              } else {
+                const root = bassRoot(chord);
+                if (root !== null)
+                  violinNote(
+                    session,
+                    root + 24,
+                    when + 0.02,
+                    length * 0.95,
+                    0.95,
+                  );
+              }
+            }
+
+            if (L.guitarOn) {
+              const notes = stringsPowerChord(chord);
+              if (notes && notes.length) {
+                notes
+                  .slice(0, 3)
+                  .forEach((m, i) =>
+                    electricGuitarNote(
+                      session,
+                      m + 12,
+                      when + i * 0.025,
+                      length * 0.9,
+                      0.9 - i * 0.1,
+                    ),
+                  );
+              } else {
+                const root = bassRoot(chord);
+                if (root !== null)
+                  electricGuitarNote(
+                    session,
+                    root + 12,
+                    when,
+                    length * 0.9,
+                    0.9,
+                  );
+              }
+            }
+
+            if (L.fluteLeadOn) {
+              const notes = stringsPowerChord(chord);
+              const midi =
+                notes && notes.length
+                  ? notes[notes.length - 1] + 12
+                  : (bassRoot(chord) ?? 60) + 24;
+              melodyNote(
+                session,
+                "flute",
+                midi,
+                when + 0.03,
+                length * 0.92,
+                0.95,
+              );
+            }
+          }
+        }
+
+        /* ---- extra percussion (independent of chord changes) ---- */
+        if (L.shakerOn) {
+          // soft 8th-note shaker feel
+          shakerNote(session, when, beat === 0 ? 0.45 : 0.35);
+          if (!compound) {
+            shakerNote(session, when + beatSec * 0.5, 0.28);
+          }
+        }
+        if (
+          L.tambourineOn &&
+          (beat === 1 || beat === 3 || (compound && beat === 3))
+        ) {
+          tambourineNote(session, when, 0.55);
+        }
+        if (L.percussionOn && beat === 0) {
+          // light hit on bar one, occasional higher fill on beat 2 of even bars
+          handPercNote(session, when, 0.25, 0.6);
+          if (bar % 2 === 1 && L.beatsPerBar >= 3) {
+            handPercNote(session, when + beatSec * 2, 0.7, 0.4);
           }
         }
 
@@ -455,6 +620,18 @@ export function useSongPlayer({
     setDrumsOn,
     setBassOn,
     setStringsOn,
+    violinOn,
+    setViolinOn,
+    guitarOn,
+    setGuitarOn,
+    fluteLeadOn,
+    setFluteLeadOn,
+    shakerOn,
+    setShakerOn,
+    tambourineOn,
+    setTambourineOn,
+    percussionOn,
+    setPercussionOn,
     loop,
     setLoop,
     pedalOn,
