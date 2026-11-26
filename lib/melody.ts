@@ -104,27 +104,30 @@ export function beatUnits(beatsPerBar: number): number {
   return beatsPerBar === 6 ? 6 : 4;
 }
 
-// Positive = a sung note, negative = a rest. Each template adds up to the bar.
-// Prefer breathing room: many low-syllable patterns end with a rest or hold.
+/**
+ * Positive = a sung note, negative = a rest.
+ * Templates are deliberately sparse so the singer has room to breathe.
+ * Preference order for low syllable counts: held note + rest, short phrase + rest.
+ */
 const TEMPLATES: Record<number, Record<number, number[]>> = {
   4: {
     0: [-16],
-    1: [8, -8],
-    2: [4, 4, -8],
-    3: [4, 4, 4, -4],
-    4: [4, 4, 4, 4],
-    5: [4, 4, 2, 2, 4],
-    6: [4, 2, 2, 4, 2, 2],
-    7: [4, 2, 2, 2, 2, 2, 2],
-    8: [2, 2, 2, 2, 2, 2, 2, 2],
+    1: [8, -8], // long note, half-bar rest
+    2: [4, 4, -8], // two quarters, then rest
+    3: [4, 4, 4, -4], // three quarters + quarter rest
+    4: [4, 4, 4, 2, -2], // slightly more movement, still ends with air
+    5: [4, 2, 2, 4, -4], // classic short-short-long + rest
+    6: [2, 2, 4, 2, 2, -4], // mixed + breathing room
+    7: [2, 2, 2, 2, 4, 2, -2], // denser but still ends open
+    8: [2, 2, 2, 2, 2, 2, 2, -2], // never completely fill the bar
   },
   3: {
     0: [-12],
     1: [8, -4],
     2: [4, 4, -4],
-    3: [4, 4, 4],
-    4: [4, 4, 2, 2],
-    5: [4, 2, 2, 2, 2],
+    3: [4, 4, 2, -2],
+    4: [4, 2, 2, 2, -2],
+    5: [2, 2, 2, 2, 2, -2],
     6: [2, 2, 2, 2, 2, 2],
   },
   6: {
@@ -138,14 +141,83 @@ const TEMPLATES: Record<number, Record<number, number[]>> = {
   },
 };
 
-function rhythmFor(n: number, beatsPerBar: number): number[] {
+/**
+ * Build a rhythm that respects both syllable count and the breath marks
+ * coming from the lyric (punctuation / end-of-line).
+ * The result always contains exactly `n` positive values (one per syllable)
+ * and the absolute values sum to one full bar.
+ */
+function rhythmFor(
+  n: number,
+  beatsPerBar: number,
+  pauses: number[] = [],
+): number[] {
   const U = unitsPerBar(beatsPerBar);
   const table = TEMPLATES[beatsPerBar] ?? TEMPLATES[4];
-  if (table[n]) return table[n];
-  // Busy bars: a mix of eighths and sixteenths (2a + b = U, a + b = n).
-  const a = Math.max(0, U - n);
-  const b = Math.max(0, 2 * n - U);
-  return [...Array(a).fill(2), ...Array(b).fill(1)];
+
+  // Prefer the pre-written sparse templates when they exist.
+  let base = table[n] ? [...table[n]] : null;
+
+  if (!base) {
+    // Busy bars: mix of eighths and sixteenths, but still leave a little air
+    // at the end whenever possible.
+    const a = Math.max(0, U - n);
+    const b = Math.max(0, 2 * n - U);
+    base = [...Array(a).fill(2), ...Array(b).fill(1)];
+    // If we can, turn the final note into a shorter note + rest.
+    if (base.length > 0 && base[base.length - 1] >= 2 && n < U) {
+      const last = base.pop()!;
+      base.push(last - 1, -1);
+    }
+  }
+
+  // Now inject / enlarge rests according to the lyric’s pause levels.
+  // pauses[i] = 0/1/2 after the i-th syllable.
+  if (pauses.length === n && n > 0) {
+    const sung: number[] = [];
+    let restBudget = 0;
+
+    // Collect the positive (sung) slots and the existing rest slots.
+    for (const r of base) {
+      if (r > 0) sung.push(r);
+      else restBudget += -r;
+    }
+
+    // Guarantee at least a short rest after any syllable that wants one,
+    // and a longer rest after strong punctuation, by stealing length from
+    // the preceding note if necessary.
+    const final: number[] = [];
+    for (let i = 0; i < sung.length; i++) {
+      const len = sung[i];
+      const want = pauses[i] ?? 0;
+      if (want > 0) {
+        const needed = want === 2 ? 4 : 2;
+        if (len > needed) {
+          final.push(len - needed);
+          final.push(-needed);
+        } else if (len > 1) {
+          final.push(1);
+          final.push(-(len - 1));
+        } else {
+          final.push(len);
+        }
+      } else {
+        final.push(len);
+      }
+    }
+
+    // Any remaining rest budget that was in the original template goes at the end.
+    const used = final.reduce((s, v) => s + Math.abs(v), 0);
+    if (used < U) {
+      final.push(-(U - used));
+    }
+
+    // Safety: make sure we still have exactly n positive numbers.
+    const positive = final.filter((v) => v > 0).length;
+    if (positive === n) return final;
+  }
+
+  return base;
 }
 
 /* ---------------------------------- melody ---------------------------------- */
@@ -298,10 +370,11 @@ export function buildMelody(
 
       /* syllables -> rhythm */
       const syl = capSyllables(barSyllables(segs), U);
+      const spec = specs[flat];
+      const pauses = spec?.pauses ?? [];
 
       /* the AI's tune, when it fits this bar's words */
       const stored = composed?.[flat];
-      const spec = specs[flat];
       const repaired =
         stored && stored.length > 0 && spec
           ? repairBar(
@@ -324,7 +397,8 @@ export function buildMelody(
         return;
       }
 
-      const rhythm = rhythmFor(syl.length, beatsPerBar);
+      // Fallback: build a more natural, breathing rhythm.
+      const rhythm = rhythmFor(syl.length, beatsPerBar, pauses);
 
       /* where this bar should be heading (a gentle arch over each 4 bars) */
       const inPhrase = bi % 4;
@@ -355,7 +429,6 @@ export function buildMelody(
           return;
         }
         lastSungIndex = ri;
-        u += 0;
         notes.push({ u, d: r, deg: 0, text: "", joinNext: false });
         u += r;
       });
@@ -405,6 +478,8 @@ export function buildMelody(
             if (c === prev2) cost += 0.6; // avoid circling back and forth
             if (leap > 4) cost += 4;
             if (sung === 0 && leap > 2) cost += 1; // gentle entry
+            // Prefer longer notes on strong beats / phrase ends (more natural emphasis)
+            if (strong || isLastSung) cost -= 0.3;
             cost += rand() * 1.6;
             if (cost < best) {
               best = cost;
