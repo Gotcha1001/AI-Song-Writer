@@ -11,12 +11,18 @@
 //   - strong beats land on notes of the chord that is playing
 //   - weak beats move by step, phrases rise and fall, and every 4 bars
 //     (and the end of each section) come to rest on a chord note / the tonic
+//   - AI bars are tidied by repairBar(): chord notes on beats / long notes,
+//     stepwise passing notes, and a rest wherever the lyric breathes
 //   - the same section name (Verse 1 / Verse 2, Chorus ...) gets the same tune
 //
 // Notes are stored as SCALE DEGREES (0 = tonic, 7 = the octave above), so the
 // melody keeps its shape when the song is transposed.
 import { capSyllables, barSyllables } from "@/convex/lib/syllables";
-import type { StoredBar } from "@/convex/lib/melodyPrompt";
+import {
+  buildBarSpecs,
+  repairBar,
+  type StoredBar,
+} from "@/convex/lib/melodyPrompt";
 import { chordTones } from "@/lib/music";
 import type { SongSection } from "@/lib/songTypes";
 
@@ -261,6 +267,8 @@ export function buildMelody(
 
   const bars: MelodyBar[] = [];
   let flatIndex = 0;
+  // Chords, syllables and breath points for every bar (same order as `composed`).
+  const specs = buildBarSpecs(sections, beatsPerBar);
 
   for (const section of sections) {
     const shape = sectionShape(section.name);
@@ -292,7 +300,19 @@ export function buildMelody(
       const syl = capSyllables(barSyllables(segs), U);
 
       /* the AI's tune, when it fits this bar's words */
-      const fromAi = storedBarToNotes(composed?.[flat], syl, U);
+      const stored = composed?.[flat];
+      const spec = specs[flat];
+      const repaired =
+        stored && stored.length > 0 && spec
+          ? repairBar(
+              stored,
+              spec,
+              key,
+              beatsPerBar,
+              written.length ? prev : null,
+            )
+          : stored;
+      const fromAi = storedBarToNotes(repaired, syl, U);
       if (fromAi) {
         const lastPitch = [...fromAi].reverse().find((n) => n.deg !== null);
         if (lastPitch && lastPitch.deg !== null) {
