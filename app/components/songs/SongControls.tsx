@@ -209,7 +209,7 @@ export function SongControls(p: SongControlsProps) {
         />
         <Toggle
           id="snd-guitar"
-          label="Electric guitar"
+          label="Acoustic guitar"
           checked={player.guitarOn}
           onChange={player.setGuitarOn}
         />

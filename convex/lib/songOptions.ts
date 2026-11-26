@@ -124,8 +124,8 @@ export const EXTRA_INSTRUMENTS = [
   },
   {
     key: "electricGuitar",
-    label: "Electric Guitar",
-    description: "Clean electric guitar with slight drive",
+    label: "Acoustic Guitar",
+    description: "Strummed acoustic guitar with a touch of reverb",
   },
   {
     key: "fluteLead",
