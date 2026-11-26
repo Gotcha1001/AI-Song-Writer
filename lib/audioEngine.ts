@@ -7,6 +7,7 @@
 //   strings        string section pad (detuned saws + slow attack + vibrato)
 //   violin         solo bowed violin with expressive vibrato and bow noise
 //   electricGuitar clean / lightly driven electric guitar with soft-clip
+//   guitarStrumNote plucked-string (Karplus-Strong) acoustic guitar with body EQ + extra reverb
 //   flute / warm   melody leads (also used as optional extra instruments)
 //   voice          vowel-singing synth (formants + vibrato)
 //   drums          kick / snare / hat, and a metronome click
@@ -85,6 +86,8 @@ export interface Session {
   ctx: AudioContext;
   /** Connect instruments here. */
   input: GainNode;
+  /** Extra reverb: feed this (as well as `input`) for a wetter sound. */
+  wet: GainNode;
   /** Fade out and disconnect. */
   stop(fadeSeconds?: number): void;
 }
@@ -109,13 +112,18 @@ export function createSession(ctx: AudioContext): Session {
   const verb = ctx.createConvolver();
   verb.buffer = reverbImpulse(ctx);
 
+  const wet = ctx.createGain();
+  wet.gain.value = 1;
+
   input.connect(dry).connect(comp);
   input.connect(send).connect(verb).connect(comp);
+  wet.connect(verb);
   comp.connect(out).connect(ctx.destination);
 
   return {
     ctx,
     input,
+    wet,
     stop(fade = 0.12) {
       const t = ctx.currentTime;
       out.gain.cancelScheduledValues(t);
@@ -725,6 +733,153 @@ export function electricGuitarNote(
 /* ------------------------------ percussion --------------------------------- */
 
 /** Soft egg / shaker: filtered noise with a short envelope, good on 8ths. */
+/* ------------------------------ acoustic guitar ------------------------------ */
+
+/**
+ * A plucked steel string, rendered once per pitch with the Karplus-Strong
+ * method (a burst of noise circulating in a loop that loses a little high
+ * end each lap, which is exactly how a real string rings and mellows).
+ * The result is cached, so each note is only calculated the first time.
+ */
+const pluckCache = new WeakMap<AudioContext, Map<number, AudioBuffer>>();
+function pluckBuffer(ctx: AudioContext, midi: number): AudioBuffer {
+  let cache = pluckCache.get(ctx);
+  if (!cache) pluckCache.set(ctx, (cache = new Map()));
+  const hit = cache.get(midi);
+  if (hit) return hit;
+
+  const sr = ctx.sampleRate;
+  const f = midiToHz(midi);
+  const seconds = f < 150 ? 3.4 : 2.8;
+  const len = Math.floor(sr * seconds);
+  const out = new Float32Array(len);
+
+  // brightness of the loop filter: 0.5 is a plain average (dull), higher is brighter
+  const S = 0.64;
+  const L = sr / f - (1 - S); // loop length, compensating the filter's own delay
+  const K = Math.ceil(L) + 1;
+
+  // the pick: noise, smoothed a little, plucked ~1/7 of the way along the string
+  const e = new Float32Array(K);
+  let lp = 0;
+  for (let i = 0; i < K; i++) {
+    lp += 0.75 * (Math.random() * 2 - 1 - lp);
+    e[i] = lp;
+  }
+  const comb = Math.max(1, Math.round(K * 0.14));
+  for (let i = K - 1; i >= comb; i--) e[i] -= e[i - comb];
+  let rms = 0;
+  for (let i = 0; i < K; i++) rms += e[i] * e[i];
+  rms = Math.sqrt(rms / K) || 1;
+  for (let i = 0; i < K; i++) out[i] = (e[i] / rms) * 0.5;
+
+  // how long the string rings (T60), shorter for high strings
+  const t60 = f < 200 ? 3.8 : f < 450 ? 3.2 : 2.2;
+  const decay = Math.pow(0.001, 1 / (f * t60));
+  for (let n = K; n < len; n++) {
+    const pos = n - L;
+    const i0 = Math.floor(pos);
+    const fr = pos - i0;
+    const a = out[i0] * (1 - fr) + out[i0 + 1] * fr;
+    const b = out[i0 - 1] * (1 - fr) + out[i0] * fr;
+    out[n] = decay * (S * a + (1 - S) * b);
+  }
+
+  // a tiny pick click, then normalise
+  const click = Math.floor(sr * 0.012);
+  for (let i = 0; i < click; i++) {
+    out[i] += (Math.random() * 2 - 1) * Math.exp(-i / (sr * 0.003)) * 0.22;
+  }
+  let peak = 0;
+  for (let i = 0; i < len; i++) peak = Math.max(peak, Math.abs(out[i]));
+  const buf = ctx.createBuffer(1, len, sr);
+  const d = buf.getChannelData(0);
+  const g = peak ? 0.9 / peak : 1;
+  for (let i = 0; i < len; i++) d[i] = out[i] * g;
+  cache.set(midi, buf);
+  return buf;
+}
+
+/**
+ * The guitar's own little mixing desk: the wooden "body" (a warm bump low
+ * down and some sparkle up high) and its own extra reverb. Built once per run.
+ */
+const guitarBusCache = new WeakMap<Session, GainNode>();
+function guitarBus(s: Session): GainNode {
+  const hit = guitarBusCache.get(s);
+  if (hit) return hit;
+  const ctx = s.ctx;
+  const bus = ctx.createGain();
+
+  const warmth = ctx.createBiquadFilter();
+  warmth.type = "peaking";
+  warmth.frequency.value = 110;
+  warmth.Q.value = 1;
+  warmth.gain.value = 4;
+
+  const box = ctx.createBiquadFilter(); // cuts the muddy low-mids
+  box.type = "peaking";
+  box.frequency.value = 330;
+  box.Q.value = 1.2;
+  box.gain.value = -3;
+
+  const sparkle = ctx.createBiquadFilter();
+  sparkle.type = "peaking";
+  sparkle.frequency.value = 3200;
+  sparkle.Q.value = 0.8;
+  sparkle.gain.value = 3.5;
+
+  const air = ctx.createBiquadFilter();
+  air.type = "lowpass";
+  air.frequency.value = 9500;
+
+  const reverb = ctx.createGain();
+  reverb.gain.value = GUITAR_REVERB;
+
+  bus.connect(warmth).connect(box).connect(sparkle).connect(air);
+  air.connect(s.input);
+  air.connect(reverb).connect(s.wet);
+  guitarBusCache.set(s, bus);
+  return bus;
+}
+
+/** How loud one string is, and how much extra reverb the guitar gets. */
+const GUITAR_LEVEL = 0.05;
+const GUITAR_REVERB = 0.9;
+
+/**
+ * One string of a strummed acoustic guitar. Play 4-5 of these a few
+ * milliseconds apart for a whole chord. The string rings until `seconds`
+ * are up, then is damped quickly, like a hand muting it at the next strum.
+ */
+export function guitarStrumNote(
+  s: Session,
+  midi: number,
+  when: number,
+  seconds: number,
+  velocity = 0.7,
+): void {
+  const ctx = s.ctx;
+  const dur = Math.max(0.08, seconds);
+  const vel = Math.min(1, Math.max(0.05, velocity));
+
+  const src = ctx.createBufferSource();
+  src.buffer = pluckBuffer(ctx, midi);
+
+  const env = ctx.createGain();
+  const peak = GUITAR_LEVEL * Math.pow(vel, 1.1);
+  env.gain.setValueAtTime(peak, when);
+  env.gain.setValueAtTime(peak, when + dur);
+  env.gain.setTargetAtTime(0, when + dur, 0.05);
+
+  const pan = ctx.createStereoPanner();
+  pan.pan.value = Math.max(-0.3, Math.min(0.3, (midi - 60) / 45));
+
+  src.connect(env).connect(pan).connect(guitarBus(s));
+  src.start(when);
+  src.stop(when + dur + 0.5);
+}
+
 export function shakerNote(s: Session, when: number, velocity = 0.55): void {
   const ctx = s.ctx;
   const vel = Math.min(1, Math.max(0.05, velocity));

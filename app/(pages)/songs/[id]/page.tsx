@@ -74,6 +74,7 @@ export default function SongPage() {
     beatsPerBar: song?.beatsPerBar ?? 4,
     melody,
     extraInstruments: song?.extraInstruments ?? [],
+    genre: song?.genre ?? "pop",
   });
 
   // Remembered per browser.

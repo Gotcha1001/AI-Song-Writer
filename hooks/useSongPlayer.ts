@@ -7,7 +7,7 @@ import {
   click,
   createSession,
   drums,
-  electricGuitarNote,
+  guitarStrumNote,
   handPercNote,
   melodyNote,
   pianoNote,
@@ -22,6 +22,7 @@ import {
 } from "@/lib/audioEngine";
 import type { ExtraInstrumentKey } from "@/convex/lib/songOptions";
 import { barSyllables, degreeToMidi, type Melody } from "@/lib/melody";
+import { arrangeSong, violinCarry } from "@/lib/arrangement";
 import { bassRoot, stringsPowerChord, voiceChord } from "@/lib/music";
 import type { SongBar, SongSection } from "@/lib/songTypes";
 
@@ -60,6 +61,8 @@ interface Options {
   melody: Melody | null;
   /** Extra instruments chosen when the song was generated (pre-enables toggles). */
   extraInstruments?: ExtraInstrumentKey[];
+  /** The song's genre ("Rock", "Country"...): shapes the guitar / flute / violin parts. */
+  genre?: string;
 }
 
 interface Queued {
@@ -82,8 +85,14 @@ export function useSongPlayer({
   beatsPerBar,
   melody,
   extraInstruments = [],
+  genre = "pop",
 }: Options) {
   const flat = useMemo(() => flattenBars(sections), [sections]);
+  // Rhythm guitar, flute counter-melody and violin harmony (see lib/arrangement.ts).
+  const arrangement = useMemo(
+    () => arrangeSong(sections, melody, beatsPerBar, genre),
+    [sections, melody, beatsPerBar, genre],
+  );
 
   const [playing, setPlaying] = useState(false);
   const [currentIndex, setCurrentIndex] = useState<number | null>(null);
@@ -142,6 +151,7 @@ export function useSongPlayer({
     speakOn,
     voiceURI,
     melody,
+    arrangement,
   });
 
   // Keep the running scheduler in sync with the latest settings.
@@ -168,6 +178,7 @@ export function useSongPlayer({
       speakOn,
       voiceURI,
       melody,
+      arrangement,
     };
   }, [
     flat,
@@ -191,6 +202,7 @@ export function useSongPlayer({
     speakOn,
     voiceURI,
     melody,
+    arrangement,
   ]);
 
   // When song data arrives (async), pre-enable instruments the user selected.
@@ -277,6 +289,23 @@ export function useSongPlayer({
       const queue: Queued[] = [];
       setPlaying(true);
 
+      // pressing play mid-song: keep a violin note that is already held
+      if (startBar > 0 && live.current.violinOn) {
+        const L0 = live.current;
+        const comp0 = L0.beatsPerBar === 6;
+        const beatSec0 = 60 / L0.bpm / (comp0 ? 3 : 1);
+        const pulse0 = L0.arrangement.unitsPerBar / L0.beatsPerBar;
+        for (const c of violinCarry(L0.arrangement, startBar)) {
+          violinNote(
+            session,
+            c.midi,
+            pos.time + 0.02,
+            (c.units / pulse0) * beatSec0 * 0.97,
+            c.vel,
+          );
+        }
+      }
+
       /** Schedule every sound that belongs to one beat. */
       const scheduleBeat = (bar: number, beat: number, when: number) => {
         const L = live.current;
@@ -326,92 +355,64 @@ export function useSongPlayer({
           }
         }
 
-        /* ---- extra melodic instruments (independent of bass/strings) ---- */
-        // Trigger on the same chord-change beats as bass, but not gated by those toggles.
+        /* ---- guitar, flute and violin: planned parts (lib/arrangement.ts) ---- */
         {
-          const segs = item.bar.segments;
-          const starts = segs.map((_, i) =>
-            Math.floor((i * L.beatsPerBar) / segs.length),
-          );
-          let active = -1;
-          for (let i = 0; i < segs.length; i++) {
-            if (starts[i] <= beat && segs[i].chord) active = i;
+          const A = L.arrangement;
+          const pulse = A.unitsPerBar / L.beatsPerBar; // sixteenths per beat
+          const from = beat * pulse;
+          const to = from + pulse;
+          const at = (u: number) => when + ((u - from) / pulse) * beatSec;
+
+          if (L.guitarOn) {
+            for (const ev of A.guitar[bar] ?? []) {
+              if (ev.u < from || ev.u >= to) continue;
+              const t0 = at(ev.u + ev.shift);
+              const len = (ev.d / pulse) * beatSec * 0.95;
+              // down-stroke: every string low to high; up-stroke: top strings only
+              const notes =
+                ev.dir === "down"
+                  ? ev.notes
+                  : [...ev.notes].reverse().slice(0, 4);
+              const spread = Math.min(
+                0.09,
+                Math.min(0.035, beatSec * (ev.dir === "down" ? 0.07 : 0.05)) *
+                  ev.spread,
+              );
+              notes.forEach((m, i) =>
+                guitarStrumNote(
+                  session,
+                  m,
+                  t0 + i * spread,
+                  len,
+                  ev.vel * (1 - i * 0.03),
+                ),
+              );
+            }
           }
-          const chord = active >= 0 ? segs[active].chord : null;
-          if (chord && starts[active] === beat) {
-            const nextStart =
-              active + 1 < segs.length ? starts[active + 1] : L.beatsPerBar;
-            const length = Math.max(0.2, (nextStart - beat) * beatSec);
 
-            if (L.violinOn) {
-              // Chord tones an octave up — clear solo violin line
-              const notes = stringsPowerChord(chord);
-              if (notes && notes.length) {
-                // root + fifth up an octave
-                const top = notes[notes.length - 1] + 12;
-                violinNote(session, top, when + 0.02, length * 0.95, 0.95);
-                if (notes.length > 1) {
-                  violinNote(
-                    session,
-                    notes[0] + 12,
-                    when + 0.04,
-                    length * 0.9,
-                    0.55,
-                  );
-                }
-              } else {
-                const root = bassRoot(chord);
-                if (root !== null)
-                  violinNote(
-                    session,
-                    root + 24,
-                    when + 0.02,
-                    length * 0.95,
-                    0.95,
-                  );
-              }
-            }
-
-            if (L.guitarOn) {
-              const notes = stringsPowerChord(chord);
-              if (notes && notes.length) {
-                notes
-                  .slice(0, 3)
-                  .forEach((m, i) =>
-                    electricGuitarNote(
-                      session,
-                      m + 12,
-                      when + i * 0.025,
-                      length * 0.9,
-                      0.9 - i * 0.1,
-                    ),
-                  );
-              } else {
-                const root = bassRoot(chord);
-                if (root !== null)
-                  electricGuitarNote(
-                    session,
-                    root + 12,
-                    when,
-                    length * 0.9,
-                    0.9,
-                  );
-              }
-            }
-
-            if (L.fluteLeadOn) {
-              const notes = stringsPowerChord(chord);
-              const midi =
-                notes && notes.length
-                  ? notes[notes.length - 1] + 12
-                  : (bassRoot(chord) ?? 60) + 24;
+          if (L.fluteLeadOn) {
+            for (const ev of A.flute[bar] ?? []) {
+              if (ev.u < from || ev.u >= to) continue;
               melodyNote(
                 session,
                 "flute",
-                midi,
-                when + 0.03,
-                length * 0.92,
-                0.95,
+                ev.midi,
+                at(ev.u),
+                (ev.d / pulse) * beatSec * 0.95,
+                ev.vel,
+              );
+            }
+          }
+
+          if (L.violinOn) {
+            for (const ev of A.violin[bar] ?? []) {
+              if (ev.u < from || ev.u >= to) continue;
+              violinNote(
+                session,
+                ev.midi,
+                at(ev.u),
+                (ev.d / pulse) * beatSec * 0.97,
+                ev.vel,
               );
             }
           }
