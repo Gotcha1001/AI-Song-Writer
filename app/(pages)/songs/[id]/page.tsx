@@ -53,6 +53,9 @@ export default function SongPage() {
   const actions = useSongActions();
 
   const t = useTranspose(song?.sections ?? NO_SECTIONS, song?.key ?? "C");
+  // True from the moment a new melody is requested until the AI has saved it.
+  const [melodyAsking, setMelodyAsking] = useState(false);
+  const composing = melodyAsking || song?.melodyStatus === "composing";
   // The tune is composed by the AI from the lyrics + chords and saved on the song.
   // Bars it didn't compose (older songs, edited lyrics) get a built-in fallback.
   const melody = useMemo(
@@ -80,6 +83,10 @@ export default function SongPage() {
     melody,
     extraInstruments: song?.extraInstruments ?? [],
     genre: song?.genre ?? "pop",
+    // The band is written around the vocal, so it waits for the final melody.
+    melodyReady: !composing,
+    // A view-only transpose moves any stored band plan with the chords.
+    transposeSteps: t.steps,
   });
 
   // Remembered per browser.
@@ -101,7 +108,6 @@ export default function SongPage() {
   const [sheetBusy, setSheetBusy] = useState(false);
   const [midiBusy, setMidiBusy] = useState(false);
   const [bundleBusy, setBundleBusy] = useState(false);
-  const [melodyAsking, setMelodyAsking] = useState(false);
 
   if (song === undefined) {
     return (
@@ -199,7 +205,7 @@ export default function SongPage() {
   };
 
   const warnIfPlaceholder = () => {
-    if (melodyAsking || song.melodyStatus === "composing") {
+    if (composing) {
       toast.message(
         "The AI is still composing, so this download has the placeholder tune.",
       );
@@ -292,8 +298,6 @@ export default function SongPage() {
     await actions.regenerateMelody(song._id);
     setMelodyAsking(false);
   };
-
-  const composing = melodyAsking || song.melodyStatus === "composing";
 
   const editingBar = editing
     ? song.sections[editing.si]?.bars[editing.bi]
@@ -421,7 +425,8 @@ export default function SongPage() {
             <p className="rounded-lg border border-cyan-500/25 bg-card px-4 py-3 text-sm text-muted-foreground print:hidden">
               The AI is composing a melody for your lyrics. What you see and
               hear now is a placeholder tune, and it will be replaced as soon as
-              the new melody is ready.
+              the new melody is ready. The guitar, flute and violin join in once
+              it is.
             </p>
           ) : song.melodyStatus === "failed" ? (
             <p className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 bg-card px-4 py-3 text-sm print:hidden">
