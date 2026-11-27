@@ -11,6 +11,7 @@
 import type * as ai from "../ai.js";
 import type * as appearance from "../appearance.js";
 import type * as lib_appearance from "../lib/appearance.js";
+import type * as lib_arrangementPrompt from "../lib/arrangementPrompt.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_melodyPrompt from "../lib/melodyPrompt.js";
 import type * as lib_openrouter from "../lib/openrouter.js";
@@ -31,6 +32,7 @@ declare const fullApi: ApiFromModules<{
   ai: typeof ai;
   appearance: typeof appearance;
   "lib/appearance": typeof lib_appearance;
+  "lib/arrangementPrompt": typeof lib_arrangementPrompt;
   "lib/auth": typeof lib_auth;
   "lib/melodyPrompt": typeof lib_melodyPrompt;
   "lib/openrouter": typeof lib_openrouter;

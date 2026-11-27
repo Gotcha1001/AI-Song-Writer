@@ -66,3 +66,47 @@ export const extraInstrumentValidator = v.union(
 );
 
 export const extraInstrumentsValidator = v.array(extraInstrumentValidator);
+
+/* ---------------------------- arrangement plan ---------------------------- */
+
+export const arrangementStatusValidator = v.union(
+  v.literal("arranging"),
+  v.literal("ready"),
+  v.literal("failed"),
+);
+
+/**
+ * One scheduled note (flute / violin) in a stored arrangement bar.
+ * Times are in sixteenths inside the bar.
+ */
+export const arrangementNoteValidator = v.object({
+  u: v.number(),
+  d: v.number(),
+  midi: v.number(),
+  vel: v.number(),
+});
+
+/**
+ * One guitar strum in a stored arrangement bar.
+ */
+export const arrangementStrumValidator = v.object({
+  u: v.number(),
+  d: v.number(),
+  shift: v.number(),
+  notes: v.array(v.number()),
+  vel: v.number(),
+  dir: v.union(v.literal("down"), v.literal("up")),
+  spread: v.number(),
+});
+
+/**
+ * Full band plan the player can use. Guitar may be empty (rules fill it in);
+ * flute / violin bars that fail validation are also left empty so the rules
+ * engine supplies a safe fallback for just those bars.
+ */
+export const arrangementValidator = v.object({
+  unitsPerBar: v.number(),
+  guitar: v.array(v.array(arrangementStrumValidator)),
+  flute: v.array(v.array(arrangementNoteValidator)),
+  violin: v.array(v.array(arrangementNoteValidator)),
+});
