@@ -20,6 +20,7 @@ import {
   type MelodySound,
   type Session,
 } from "@/lib/audioEngine";
+import { ensureSamples } from "@/lib/sampleBank";
 import type { ExtraInstrumentKey } from "@/convex/lib/songOptions";
 import { barSyllables, degreeToMidi, type Melody } from "@/lib/melody";
 import {
@@ -390,6 +391,20 @@ export function useSongPlayer({
     live.current = snapshot;
   });
 
+  // Preload samples in the background. On Play, ensureSamples reconnects
+  // the bus to the real session input. Skip if context was closed.
+  useEffect(() => {
+    let ctx = audioRef.current;
+    if (!ctx || ctx.state === "closed") {
+      ctx = new AudioContext();
+      audioRef.current = ctx;
+    }
+    if (ctx.state === "closed") return;
+    const dummy = ctx.createGain();
+    dummy.gain.value = 1;
+    void ensureSamples(ctx, dummy);
+  }, []);
+
   // When song data arrives (async), pre-enable instruments the user selected.
   useEffect(() => {
     if (!extraInstruments.length) return;
@@ -461,11 +476,20 @@ export function useSongPlayer({
       clearTimer();
       sessionRef.current?.stop(0.08);
 
-      const ctx = audioRef.current ?? new AudioContext();
-      audioRef.current = ctx;
-      void ctx.resume();
+      // Never resume a closed context (Strict Mode / HMR / prior cleanup).
+      let ctx = audioRef.current;
+      if (!ctx || ctx.state === "closed") {
+        ctx = new AudioContext();
+        audioRef.current = ctx;
+      }
+      if (ctx.state === "suspended") void ctx.resume();
+
       const session = createSession(ctx);
       sessionRef.current = session;
+
+      // Kick off real instrument samples (smplr). First play may still use
+      // the synth until the bank finishes loading; later plays use samples.
+      void ensureSamples(ctx, session.input);
 
       const pos = { bar: startBar, beat: 0, time: ctx.currentTime + 0.1 };
       let endTime: number | null = null;
@@ -848,7 +872,10 @@ export function useSongPlayer({
       clearTimer();
       if (typeof window !== "undefined" && "speechSynthesis" in window)
         window.speechSynthesis.cancel();
-      void audioRef.current?.close();
+      const ctx = audioRef.current;
+      audioRef.current = null;
+      sessionRef.current = null;
+      if (ctx && ctx.state !== "closed") void ctx.close();
     },
     [],
   );

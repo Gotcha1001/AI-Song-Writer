@@ -23,6 +23,15 @@
 // All times are on the AudioContext clock, so the player can schedule ahead
 // and stay in time even when the browser is busy.
 import { midiToHz } from "@/lib/music";
+import {
+  sampleBass,
+  sampleFlute,
+  sampleGuitar,
+  samplePiano,
+  sampleStrings,
+  sampleViolin,
+  sampleWarm,
+} from "@/lib/sampleBank";
 
 /* ------------------------------- shared bits ------------------------------- */
 
@@ -203,6 +212,18 @@ export function pianoNote(
   { hold, velocity, pedal }: PianoOptions,
 ): void {
   const ctx = s.ctx;
+  // Prefer multi-velocity sampled piano when the bank is loaded.
+  if (
+    samplePiano(
+      ctx,
+      midi,
+      when,
+      Math.max(0.08, hold) * (pedal ? 1.35 : 1),
+      velocity,
+    )
+  ) {
+    return;
+  }
   const f = midiToHz(midi);
   const vel = Math.min(1, Math.max(0.05, velocity));
   const peak = 0.11 * Math.pow(vel, 1.3);
@@ -271,6 +292,7 @@ export function bassNote(
   velocity = 0.85,
 ): void {
   const ctx = s.ctx;
+  if (sampleBass(ctx, midi, when, Math.max(0.08, seconds), velocity)) return;
   const f = midiToHz(midi);
   const dur = Math.max(0.15, seconds);
   const peak = 0.14 * Math.min(1, Math.max(0.05, velocity));
@@ -321,6 +343,7 @@ export function stringsNote(
   velocity = 0.65,
 ): void {
   const ctx = s.ctx;
+  if (sampleStrings(ctx, midi, when, Math.max(0.1, seconds), velocity)) return;
   const f = midiToHz(midi);
   const dur = Math.max(0.3, seconds);
   const peak = 0.05 * Math.min(1, Math.max(0.05, velocity));
@@ -496,9 +519,14 @@ export function melodyNote(
   velocity = 0.8,
 ): void {
   const ctx = s.ctx;
-  const f = midiToHz(midi);
   const dur = Math.max(0.12, seconds);
   const vel = Math.min(1, Math.max(0.05, velocity));
+
+  // Sampled flute / warm lead when the bank is ready (bell stays synth).
+  if (sound === "flute" && sampleFlute(ctx, midi, when, dur, vel)) return;
+  if (sound === "warm" && sampleWarm(ctx, midi, when, dur, vel)) return;
+
+  const f = midiToHz(midi);
 
   if (sound === "bell") {
     const ring = Math.min(1.6, Math.max(0.5, dur * 1.2));
@@ -635,6 +663,7 @@ export function violinNote(
   velocity = 0.75,
 ): void {
   const ctx = s.ctx;
+  if (sampleViolin(ctx, midi, when, Math.max(0.15, seconds), velocity)) return;
   const f = midiToHz(midi);
   const dur = Math.max(0.25, seconds);
   const vel = Math.min(1, Math.max(0.05, velocity));
@@ -920,6 +949,7 @@ export function guitarStrumNote(
 ): void {
   const ctx = s.ctx;
   const dur = Math.max(0.08, seconds);
+  if (sampleGuitar(ctx, midi, when, dur, velocity)) return;
   const vel = Math.min(1, Math.max(0.05, velocity));
 
   const src = ctx.createBufferSource();
