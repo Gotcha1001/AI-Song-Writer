@@ -2,6 +2,8 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import {
+  arrangementStatusValidator,
+  arrangementValidator,
   beatsPerBarValidator,
   chordStyleValidator,
   extraInstrumentsValidator,
@@ -74,6 +76,14 @@ export default defineSchema({
     melodyStatus: v.optional(melodyStatusValidator),
     melodyError: v.optional(v.string()),
     melodyStartedAt: v.optional(v.number()),
+
+    // Band arrangement (guitar / flute / violin plan). Third AI step that runs
+    // after the melody is ready. The player uses this when present and falls
+    // back to the pure rules engine otherwise.
+    arrangement: v.optional(arrangementValidator),
+    arrangementStatus: v.optional(arrangementStatusValidator),
+    arrangementError: v.optional(v.string()),
+    arrangementStartedAt: v.optional(v.number()),
 
     isFavorite: v.boolean(),
     updatedAt: v.number(),

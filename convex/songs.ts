@@ -13,6 +13,7 @@ import {
 import { getCurrentUser } from "./lib/auth";
 import { CHORD_RE, LENGTH_OPTIONS, LIMITS } from "./lib/songOptions";
 import {
+  arrangementValidator,
   beatsPerBarValidator,
   chordStyleValidator,
   extraInstrumentsValidator,
@@ -78,6 +79,10 @@ async function startGeneration(
     melodyStatus: undefined,
     melodyError: undefined,
     melodyStartedAt: undefined,
+    arrangement: undefined,
+    arrangementStatus: undefined,
+    arrangementError: undefined,
+    arrangementStartedAt: undefined,
     updatedAt: Date.now(),
   });
   await ctx.scheduler.runAfter(0, internal.ai.generateSong, { songId });
@@ -254,6 +259,11 @@ export const regenerateMelody = mutation({
       melodyStatus: "composing",
       melodyError: undefined,
       melodyStartedAt: startedAt,
+      // new melody invalidates any previous band plan
+      arrangement: undefined,
+      arrangementStatus: undefined,
+      arrangementError: undefined,
+      arrangementStartedAt: undefined,
       updatedAt: startedAt,
     });
     await ctx.scheduler.runAfter(0, internal.ai.composeMelody, {
@@ -306,6 +316,11 @@ export const updateContent = mutation({
     await ctx.db.patch(songId, {
       sections,
       ...(key !== undefined ? { key } : {}),
+      // chart edits change the grid the band was written against
+      arrangement: undefined,
+      arrangementStatus: undefined,
+      arrangementError: undefined,
+      arrangementStartedAt: undefined,
       updatedAt: Date.now(),
     });
   },
@@ -366,6 +381,10 @@ export const saveGenerated = internalMutation({
       melodyStatus: "composing",
       melodyError: undefined,
       melodyStartedAt: startedAt,
+      arrangement: undefined,
+      arrangementStatus: undefined,
+      arrangementError: undefined,
+      arrangementStartedAt: undefined,
       updatedAt: startedAt,
     });
     await ctx.scheduler.runAfter(0, internal.ai.composeMelody, {
@@ -385,11 +404,21 @@ export const saveMelody = internalMutation({
     const song = await ctx.db.get(songId);
     // deleted, rewritten, or a newer melody was asked for: drop this result
     if (!song || song.melodyStartedAt !== startedAt) return;
+    const arrStarted = Date.now();
     await ctx.db.patch(songId, {
       melody,
       melodyStatus: "ready",
       melodyError: undefined,
-      updatedAt: Date.now(),
+      // kick off the band arranger as soon as the tune is in
+      arrangement: undefined,
+      arrangementStatus: "arranging",
+      arrangementError: undefined,
+      arrangementStartedAt: arrStarted,
+      updatedAt: arrStarted,
+    });
+    await ctx.scheduler.runAfter(0, internal.ai.composeArrangement, {
+      songId,
+      startedAt: arrStarted,
     });
   },
 });
@@ -399,9 +428,49 @@ export const markMelodyFailed = internalMutation({
   handler: async (ctx, { songId, startedAt, error }) => {
     const song = await ctx.db.get(songId);
     if (!song || song.melodyStartedAt !== startedAt) return;
+    // Melody failed: still try a band plan so the song is playable with rules + any hooks.
+    const arrStarted = Date.now();
     await ctx.db.patch(songId, {
       melodyStatus: "failed",
       melodyError: error.slice(0, 300),
+      arrangementStatus: "arranging",
+      arrangementError: undefined,
+      arrangementStartedAt: arrStarted,
+      updatedAt: arrStarted,
+    });
+    await ctx.scheduler.runAfter(0, internal.ai.composeArrangement, {
+      songId,
+      startedAt: arrStarted,
+    });
+  },
+});
+
+export const saveArrangement = internalMutation({
+  args: {
+    songId: v.id("songs"),
+    startedAt: v.number(),
+    arrangement: arrangementValidator,
+  },
+  handler: async (ctx, { songId, startedAt, arrangement }) => {
+    const song = await ctx.db.get(songId);
+    if (!song || song.arrangementStartedAt !== startedAt) return;
+    await ctx.db.patch(songId, {
+      arrangement,
+      arrangementStatus: "ready",
+      arrangementError: undefined,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const markArrangementFailed = internalMutation({
+  args: { songId: v.id("songs"), startedAt: v.number(), error: v.string() },
+  handler: async (ctx, { songId, startedAt, error }) => {
+    const song = await ctx.db.get(songId);
+    if (!song || song.arrangementStartedAt !== startedAt) return;
+    await ctx.db.patch(songId, {
+      arrangementStatus: "failed",
+      arrangementError: error.slice(0, 300),
       updatedAt: Date.now(),
     });
   },

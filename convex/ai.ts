@@ -202,3 +202,125 @@ export const composeMelody = internalAction({
     });
   },
 });
+
+/**
+ * Third AI step: high-level band arrangement (density, roles, short hooks).
+ * Guitar stays mechanical (rules). Flute / violin hooks are validated; anything
+ * that fails is left empty so the client rules engine fills those bars.
+ * Capped at 2 attempts — a failure still leaves a complete song via rules.
+ */
+const ARRANGEMENT_ATTEMPTS = 2;
+
+export const composeArrangement = internalAction({
+  args: { songId: v.id("songs"), startedAt: v.number() },
+  handler: async (ctx, { songId, startedAt }): Promise<void> => {
+    const song = await ctx.runQuery(internal.songs.getForGeneration, {
+      songId,
+    });
+    if (
+      !song ||
+      song.status !== "ready" ||
+      song.arrangementStatus !== "arranging" ||
+      song.arrangementStartedAt !== startedAt
+    )
+      return;
+
+    const fail = (error: string) =>
+      ctx.runMutation(internal.songs.markArrangementFailed, {
+        songId,
+        startedAt,
+        error,
+      });
+
+    if (!hasAiKey()) {
+      await fail("The AI isn't configured yet (missing API key).");
+      return;
+    }
+
+    // Need a finished melody (or at least ready status) so hooks answer the vocal.
+    if (song.melodyStatus !== "ready" && song.melodyStatus !== "failed") {
+      await fail("Melody is not ready yet.");
+      return;
+    }
+
+    const {
+      buildArrangementPrompt,
+      parseArrangementPlan,
+      plansToArrangement,
+      arrangementCoverage,
+    } = await import("./lib/arrangementPrompt");
+
+    let lastError = "Unknown error";
+    let best = null as ReturnType<typeof plansToArrangement> | null;
+    let bestCoverage = 0;
+
+    for (let attempt = 1; attempt <= ARRANGEMENT_ATTEMPTS; attempt++) {
+      try {
+        const { system, user } = buildArrangementPrompt({
+          title: song.title,
+          key: song.key,
+          tempo: song.tempo,
+          beatsPerBar: song.beatsPerBar,
+          mood: song.mood,
+          genre: song.genre,
+          sections: song.sections,
+          extraInstruments: song.extraInstruments,
+        });
+        const raw = await callModel({
+          system,
+          user,
+          temperature: 0.7,
+          title: "Song Writer arrangement",
+          label: "arrangement",
+          rotate: attempt - 1,
+        });
+        const plans = parseArrangementPlan(
+          raw,
+          song.sections,
+          song.beatsPerBar,
+        );
+        if (plans.length === 0) {
+          lastError = "Model returned no usable section plans";
+          continue;
+        }
+        const totalBars = song.sections.reduce((n, s) => n + s.bars.length, 0);
+        const arrangement = plansToArrangement(
+          plans,
+          song.key,
+          song.beatsPerBar,
+          totalBars,
+        );
+        const coverage = arrangementCoverage(arrangement);
+        if (coverage > bestCoverage) {
+          best = arrangement;
+          bestCoverage = coverage;
+        }
+        if (coverage > 0) break; // good enough
+        lastError = "Hooks produced no playable notes";
+      } catch (e) {
+        lastError = e instanceof Error ? e.message : String(e);
+        console.error(
+          `[arrangement] attempt ${attempt}/${ARRANGEMENT_ATTEMPTS} failed:`,
+          lastError,
+        );
+        if (attempt < ARRANGEMENT_ATTEMPTS) {
+          await sleep(e instanceof ModelError ? e.retryAfterMs : 1200);
+        }
+      }
+    }
+
+    if (!best || bestCoverage === 0) {
+      // Soft failure: mark failed but the player still has full rules fallback.
+      await fail(
+        `Couldn't arrange the band (${lastError}). Using rule-based band.`,
+      );
+      return;
+    }
+
+    await ctx.runMutation(internal.songs.saveArrangement, {
+      songId,
+      startedAt,
+      arrangement: best,
+    });
+  },
+});

@@ -56,6 +56,15 @@ export default function SongPage() {
   // True from the moment a new melody is requested until the AI has saved it.
   const [melodyAsking, setMelodyAsking] = useState(false);
   const composing = melodyAsking || song?.melodyStatus === "composing";
+  const arranging = song?.arrangementStatus === "arranging";
+  // The band is ready only when the melody is final AND (if an arranger run
+  // was started) the arrangement has finished or failed. Older songs with no
+  // arrangementStatus unlock as soon as the melody is ready.
+  const bandReady =
+    !composing &&
+    (song?.arrangementStatus === undefined ||
+      song?.arrangementStatus === "ready" ||
+      song?.arrangementStatus === "failed");
   // The tune is composed by the AI from the lyrics + chords and saved on the song.
   // Bars it didn't compose (older songs, edited lyrics) get a built-in fallback.
   const melody = useMemo(
@@ -83,8 +92,10 @@ export default function SongPage() {
     melody,
     extraInstruments: song?.extraInstruments ?? [],
     genre: song?.genre ?? "pop",
-    // The band is written around the vocal, so it waits for the final melody.
-    melodyReady: !composing,
+    // The band is written around the vocal, so it waits for the final melody
+    // (and, when present, the AI arrangement step).
+    melodyReady: bandReady,
+    storedArrangement: song?.arrangement ?? null,
     // A view-only transpose moves any stored band plan with the chords.
     transposeSteps: t.steps,
   });
@@ -430,6 +441,15 @@ export default function SongPage() {
                 What you see and hear now is a placeholder tune. The guitar,
                 flute and violin stay locked until the final melody lands, then
                 the band arranges around it.
+              </p>
+            </div>
+          ) : arranging ? (
+            <div className="space-y-3 print:hidden">
+              <GeneratingState topic={song.topic} stage="band" />
+              <p className="rounded-lg border border-cyan-500/25 bg-card px-4 py-3 text-sm text-muted-foreground">
+                Melody is ready. The band is being arranged around it —
+                instrument toggles unlock in a moment. You can already play with
+                piano and bass.
               </p>
             </div>
           ) : song.melodyStatus === "failed" ? (
