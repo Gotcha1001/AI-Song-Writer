@@ -376,7 +376,9 @@ export default function SongPage() {
         )}
       </header>
 
-      {song.status === "generating" && <GeneratingState topic={song.topic} />}
+      {song.status === "generating" && (
+        <GeneratingState topic={song.topic} stage="lyrics" />
+      )}
       {song.status === "failed" && (
         <FailedState
           error={song.error}
@@ -422,12 +424,14 @@ export default function SongPage() {
           />
 
           {composing ? (
-            <p className="rounded-lg border border-cyan-500/25 bg-card px-4 py-3 text-sm text-muted-foreground print:hidden">
-              The AI is composing a melody for your lyrics. What you see and
-              hear now is a placeholder tune, and it will be replaced as soon as
-              the new melody is ready. The guitar, flute and violin join in once
-              it is.
-            </p>
+            <div className="space-y-3 print:hidden">
+              <GeneratingState topic={song.topic} stage="melody" />
+              <p className="rounded-lg border border-cyan-500/25 bg-card px-4 py-3 text-sm text-muted-foreground">
+                What you see and hear now is a placeholder tune. The guitar,
+                flute and violin stay locked until the final melody lands, then
+                the band arranges around it.
+              </p>
+            </div>
           ) : song.melodyStatus === "failed" ? (
             <p className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 bg-card px-4 py-3 text-sm print:hidden">
               <span>{song.melodyError ?? "Couldn't compose the melody."}</span>

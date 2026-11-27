@@ -97,15 +97,22 @@ function Toggle({
   label,
   checked,
   onChange,
+  disabled,
 }: {
   id: string;
   label: string;
   checked: boolean;
   onChange: (b: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-2">
-      <Switch id={id} checked={checked} onCheckedChange={onChange} />
+    <div className={cn("flex items-center gap-2", disabled && "opacity-50")}>
+      <Switch
+        id={id}
+        checked={checked}
+        onCheckedChange={onChange}
+        disabled={disabled}
+      />
       <Label htmlFor={id} className="text-sm">
         {label}
       </Label>
@@ -201,41 +208,52 @@ export function SongControls(p: SongControlsProps) {
       </Group>
 
       <Group title="Extra instruments">
+        {player.bandLocked && (
+          <p className="text-xs text-muted-foreground">
+            Arranging after melody… toggles unlock when the band is ready.
+          </p>
+        )}
         <Toggle
           id="snd-violin"
           label="Violin"
           checked={player.violinOn}
           onChange={player.setViolinOn}
+          disabled={player.bandLocked}
         />
         <Toggle
           id="snd-guitar"
           label="Acoustic guitar"
           checked={player.guitarOn}
           onChange={player.setGuitarOn}
+          disabled={player.bandLocked}
         />
         <Toggle
           id="snd-flute-lead"
           label="Flute"
           checked={player.fluteLeadOn}
           onChange={player.setFluteLeadOn}
+          disabled={player.bandLocked}
         />
         <Toggle
           id="snd-shaker"
           label="Shaker"
           checked={player.shakerOn}
           onChange={player.setShakerOn}
+          disabled={player.bandLocked}
         />
         <Toggle
           id="snd-tambourine"
           label="Tambourine"
           checked={player.tambourineOn}
           onChange={player.setTambourineOn}
+          disabled={player.bandLocked}
         />
         <Toggle
           id="snd-percussion"
           label="Hand percussion"
           checked={player.percussionOn}
           onChange={player.setPercussionOn}
+          disabled={player.bandLocked}
         />
       </Group>
 
