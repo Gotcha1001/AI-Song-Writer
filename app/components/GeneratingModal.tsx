@@ -14,13 +14,13 @@ import { Music } from "lucide-react";
 
 const STEPS = [
   "booting the neural song forge",
-  "tuning the strings of the matrix",
+  "writing lyrics & chords",
   "picking a key that feels right",
-  "writing verses in neon ink",
   "dropping chords under every word",
   "hunting for the hook",
+  "composing the melody",
+  "arranging the band",
   "polishing the bridge",
-  "syncing lyrics to the beat",
   "final mix, hold tight",
   "the free model is thinking hard, hang on",
 ];
