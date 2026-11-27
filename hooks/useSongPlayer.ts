@@ -24,6 +24,7 @@ import type { ExtraInstrumentKey } from "@/convex/lib/songOptions";
 import { barSyllables, degreeToMidi, type Melody } from "@/lib/melody";
 import { arrangeSong, violinCarry } from "@/lib/arrangement";
 import { bassRoot, stringsPowerChord, voiceChord } from "@/lib/music";
+import { compHitsAt, pianoCompFor } from "@/lib/pianoComp";
 import type { SongBar, SongSection } from "@/lib/songTypes";
 
 /** Melody instrument: "flute" (default, soft), "warm", "bell", or "voice" (original). */
@@ -41,7 +42,8 @@ export function flattenBars(sections: SongSection[]): FlatBar[] {
   );
 }
 
-export type PianoStyle = "chords" | "arpeggio";
+/** "comp" = the genre's own piano rhythm (lib/pianoComp.ts), "chords" = plain sustained chords. */
+export type PianoStyle = "comp" | "chords" | "arpeggio";
 
 /** The words of a bar as plain text for the speech voice ("wan-" + "dering" -> "wandering"). */
 function barText(bar: SongBar): string {
@@ -88,6 +90,8 @@ export function useSongPlayer({
   genre = "pop",
 }: Options) {
   const flat = useMemo(() => flattenBars(sections), [sections]);
+  // How the piano comps in this genre (reggae off-beat chops, boom-chick, ...).
+  const compStyle = useMemo(() => pianoCompFor(genre), [genre]);
   // Rhythm guitar, flute counter-melody and violin harmony (see lib/arrangement.ts).
   const arrangement = useMemo(
     () => arrangeSong(sections, melody, beatsPerBar, genre),
@@ -118,7 +122,7 @@ export function useSongPlayer({
   );
   const [loop, setLoop] = useState(false);
   const [pedalOn, setPedalOn] = useState(true);
-  const [pianoStyle, setPianoStyle] = useState<PianoStyle>("chords");
+  const [pianoStyle, setPianoStyle] = useState<PianoStyle>("comp");
   const [singOn, setSingOn] = useState(false);
   const [speakOn, setSpeakOn] = useState(false);
   const [voiceURI, setVoiceURI] = useState<string>("");
@@ -147,6 +151,7 @@ export function useSongPlayer({
     beatsPerBar,
     pedalOn,
     pianoStyle,
+    compStyle,
     singOn,
     speakOn,
     voiceURI,
@@ -174,6 +179,7 @@ export function useSongPlayer({
       beatsPerBar,
       pedalOn,
       pianoStyle,
+      compStyle,
       singOn,
       speakOn,
       voiceURI,
@@ -198,6 +204,7 @@ export function useSongPlayer({
     beatsPerBar,
     pedalOn,
     pianoStyle,
+    compStyle,
     singOn,
     speakOn,
     voiceURI,
@@ -286,6 +293,7 @@ export function useSongPlayer({
       let endTime: number | null = null;
       let voicing: number[] | null = null; // last right-hand voicing (voice leading)
       let arpStep = 0;
+      let curVoice: ReturnType<typeof voiceChord> = null; // voicing of the chord that is sounding
       const queue: Queued[] = [];
       setPlaying(true);
 
@@ -464,6 +472,62 @@ export function useSongPlayer({
               const v = voiceChord(seg.chord, voicing);
               if (v) {
                 voicing = v.hand;
+                curVoice = v;
+              }
+            } else if (!curVoice && seg.chord) {
+              // pressed play in the middle of a chord: voice it now
+              const v = voiceChord(seg.chord, voicing);
+              if (v) {
+                voicing = v.hand;
+                curVoice = v;
+              }
+            }
+
+            if (L.pianoStyle === "comp" && curVoice) {
+              // the genre's own rhythm: reggae off-beat chops, boom-chick, ...
+              const v = curVoice;
+              const st = L.compStyle;
+              const pedal = L.pedalOn && st.pedal;
+              for (const h of compHitsAt(st, L.beatsPerBar, beat)) {
+                const t = when + (h.pos - beat) * beatSec;
+                const toEnd = Math.max(0.05, (nextStart - h.pos) * beatSec);
+                // a hit that runs to the end of its chord rings until the chord changes
+                const hold =
+                  h.len >= nextStart - h.pos - 1e-6
+                    ? toEnd + (pedal ? 0.12 : -0.04)
+                    : Math.min(toEnd, Math.max(0.06, h.len * beatSec));
+                if (h.kind === "bass") {
+                  pianoNote(session, v.bass[0], t, {
+                    hold,
+                    velocity: h.vel,
+                    pedal,
+                  });
+                  if (h.full)
+                    pianoNote(session, v.bass[1], t + 0.004, {
+                      hold,
+                      velocity: h.vel * 0.58,
+                      pedal,
+                    });
+                } else {
+                  v.hand.forEach((m, i) =>
+                    pianoNote(session, m, t + 0.002 + i * st.roll, {
+                      hold,
+                      velocity: h.vel + (i === v.hand.length - 1 ? 0.06 : 0),
+                      pedal,
+                    }),
+                  );
+                }
+              }
+            }
+
+            if (
+              startsHere &&
+              seg.chord &&
+              L.pianoStyle !== "comp" &&
+              curVoice
+            ) {
+              {
+                const v = curVoice;
                 const hold = remaining + lift;
                 // left hand: bass + octave
                 pianoNote(session, v.bass[0], when, {

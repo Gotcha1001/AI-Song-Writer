@@ -64,6 +64,11 @@ export default function SongPage() {
             song.beatsPerBar,
             song._id,
             song.melody,
+            {
+              genre: song.genre,
+              tempo: song.tempo,
+              language: song.language,
+            },
           )
         : null,
     [song, t.sections, t.key],

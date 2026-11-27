@@ -124,7 +124,12 @@ export const composeMelody = internalAction({
       return;
     }
 
-    const specs = buildBarSpecs(song.sections, song.beatsPerBar);
+    // genre + tempo decide how the lyric is phrased (breath sizes, phrase length)
+    const specs = buildBarSpecs(song.sections, song.beatsPerBar, {
+      genre: song.genre,
+      tempo: song.tempo,
+      language: song.language,
+    });
     const U = unitsPerBar(song.beatsPerBar);
     const sungBars = specs.filter((s) => s.syllables.length > 0);
     if (sungBars.length === 0) {
@@ -157,7 +162,7 @@ export const composeMelody = internalAction({
         const raw = await callModel({
           system,
           user,
-          temperature: 1,
+          temperature: 0.9,
           title: "Song Writer melody",
           label: "melody",
           rotate: attempt - 1, // a retry asks a different model first

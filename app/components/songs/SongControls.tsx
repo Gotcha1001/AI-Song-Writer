@@ -251,6 +251,7 @@ export function SongControls(p: SongControlsProps) {
           <div className="flex gap-1">
             {(
               [
+                ["comp", "Genre comp"],
                 ["chords", "Chords"],
                 ["arpeggio", "Arpeggio"],
               ] as const
