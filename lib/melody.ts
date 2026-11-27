@@ -12,7 +12,8 @@
 //   - weak beats move by step, phrases rise and fall, and every 4 bars
 //     (and the end of each section) come to rest on a chord note / the tonic
 //   - AI bars are tidied by repairBar(): chord notes on beats / long notes,
-//     stepwise passing notes, and a rest wherever the lyric breathes
+//     stepwise passing notes, a long-short pair to break up a monotone bar,
+//     and a real rest at the end of every phrase (genre decides how long)
 //   - the same section name (Verse 1 / Verse 2, Chorus ...) gets the same tune
 //
 // Notes are stored as SCALE DEGREES (0 = tonic, 7 = the octave above), so the
@@ -21,6 +22,8 @@ import { capSyllables, barSyllables } from "@/convex/lib/syllables";
 import {
   buildBarSpecs,
   repairBar,
+  type Breath,
+  type SpecOptions,
   type StoredBar,
 } from "@/convex/lib/melodyPrompt";
 import { chordTones } from "@/lib/music";
@@ -151,8 +154,10 @@ function rhythmFor(
   n: number,
   beatsPerBar: number,
   pauses: number[] = [],
+  breath: Breath = { short: 2, long: 4 },
 ): number[] {
   const U = unitsPerBar(beatsPerBar);
+  const maxBreath = Math.max(1, Math.floor(U / 2));
   const table = TEMPLATES[beatsPerBar] ?? TEMPLATES[4];
 
   // Prefer the pre-written sparse templates when they exist.
@@ -191,7 +196,10 @@ function rhythmFor(
       const len = sung[i];
       const want = pauses[i] ?? 0;
       if (want > 0) {
-        const needed = want === 2 ? 4 : 2;
+        const needed = Math.min(
+          want === 2 ? breath.long : breath.short,
+          maxBreath,
+        );
         if (len > needed) {
           final.push(len - needed);
           final.push(-needed);
@@ -320,6 +328,9 @@ function sectionShape(name: string): { base: number; height: number } {
  * @param key      the key of those sections, e.g. "Am"
  * @param seed     anything stable for this song (its id), so the fallback tune never changes
  * @param composed the AI's melody, one list of notes per bar in song order
+ * @param opts     genre / tempo / language of the song: they decide how long the
+ *                 breaths are and how the lyric is phrased (pass the same values
+ *                 the melody was composed with)
  */
 export function buildMelody(
   sections: SongSection[],
@@ -327,6 +338,7 @@ export function buildMelody(
   beatsPerBar: number,
   seed: string,
   composed?: StoredBar[] | null,
+  opts: SpecOptions = {},
 ): Melody {
   const k = parseKeySpec(key);
   const U = unitsPerBar(beatsPerBar);
@@ -340,7 +352,7 @@ export function buildMelody(
   const bars: MelodyBar[] = [];
   let flatIndex = 0;
   // Chords, syllables and breath points for every bar (same order as `composed`).
-  const specs = buildBarSpecs(sections, beatsPerBar);
+  const specs = buildBarSpecs(sections, beatsPerBar, opts);
 
   for (const section of sections) {
     const shape = sectionShape(section.name);
@@ -398,7 +410,7 @@ export function buildMelody(
       }
 
       // Fallback: build a more natural, breathing rhythm.
-      const rhythm = rhythmFor(syl.length, beatsPerBar, pauses);
+      const rhythm = rhythmFor(syl.length, beatsPerBar, pauses, spec?.breath);
 
       /* where this bar should be heading (a gentle arch over each 4 bars) */
       const inPhrase = bi % 4;

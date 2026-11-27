@@ -49,7 +49,15 @@ export function syllabify(word: string): string[] {
   const cuts: number[] = [];
   for (let g = 0; g < groups.length - 1; g++) {
     const between = groups[g + 1].s - groups[g].e;
-    cuts.push(groups[g].e + (between <= 1 ? 0 : Math.floor(between / 2)));
+    let cut = groups[g].e + (between <= 1 ? 0 : Math.floor(between / 2));
+    // keep the suffix "-ing" whole: walk-ing, think-ing, sing-ing
+    // (a doubled consonant still splits in the middle: run-ning)
+    if (g === groups.length - 2 && between >= 2) {
+      const tail = lower.slice(groups[g + 1].s);
+      const cluster = lower.slice(groups[g].e, groups[g + 1].s);
+      if (/^ing$/.test(tail) && !/^(.)\1$/.test(cluster)) cut = groups[g + 1].s;
+    }
+    cuts.push(cut);
   }
   const out: string[] = [];
   let from = 0;
