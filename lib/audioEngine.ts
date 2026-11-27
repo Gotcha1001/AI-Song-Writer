@@ -5,7 +5,8 @@
 //                  harmonic spectrum, hammer thump, filter sweep, sustain pedal
 //   bass           plucked bass guitar (triangle + sine + saw, filter pluck)
 //   strings        string section pad (detuned saws + slow attack + vibrato)
-//   violin         solo bowed violin with expressive vibrato and bow noise
+//   violin         solo bowed violin with expressive vibrato, bow noise and
+//                  fixed stereo placement (slightly left of the vocal)
 //   electricGuitar clean / lightly driven electric guitar with soft-clip
 //   guitarStrumNote plucked-string (Karplus-Strong) acoustic guitar with body EQ + extra reverb
 //   flute / warm   melody leads (also used as optional extra instruments)
@@ -14,6 +15,10 @@
 //   shaker         soft filtered noise shaker
 //   tambourine     bright noise + metallic ring
 //   handPerc       light conga / bongo style hits
+//
+// Master chain (createSession): high-pass → dry/wet convolver reverb →
+// music-oriented compressor → soft tanh limiter → high-shelf air → output.
+// This gives a cleaner, more produced feel while staying 100 % sample-free.
 //
 // All times are on the AudioContext clock, so the player can schedule ahead
 // and stay in time even when the browser is busy.
@@ -33,23 +38,29 @@ function noiseBuffer(ctx: AudioContext): AudioBuffer {
   return buf;
 }
 
-/** A soft, dark room: decaying stereo noise. */
+/** A soft, musical room: early reflections + dark decaying tail. */
 const reverbCache = new WeakMap<AudioContext, AudioBuffer>();
 function reverbImpulse(ctx: AudioContext): AudioBuffer {
   let buf = reverbCache.get(ctx);
   if (!buf) {
-    const seconds = 2.4;
+    const seconds = 2.8;
     const len = Math.floor(ctx.sampleRate * seconds);
     buf = ctx.createBuffer(2, len, ctx.sampleRate);
     for (let ch = 0; ch < 2; ch++) {
       const d = buf.getChannelData(ch);
       let lp = 0;
+      // slight channel offset for width
+      const offset = ch === 0 ? 0 : 0.012;
       for (let i = 0; i < len; i++) {
         const t = i / len;
         // one-pole low-pass that closes over time = darker tail
-        const k = 0.55 - 0.45 * t;
+        const k = 0.58 - 0.42 * t;
         lp += k * (Math.random() * 2 - 1 - lp);
-        d[i] = lp * Math.pow(1 - t, 2.6) * (i < 400 ? i / 400 : 1);
+        // early energy + smooth power-law decay
+        const early =
+          i < ctx.sampleRate * 0.04 ? i / (ctx.sampleRate * 0.04) : 1;
+        const decay = Math.pow(1 - t, 2.35 + offset);
+        d[i] = lp * decay * early * 0.95;
       }
     }
     reverbCache.set(ctx, buf);
@@ -95,30 +106,61 @@ export interface Session {
 export function createSession(ctx: AudioContext): Session {
   const input = ctx.createGain();
 
-  const comp = ctx.createDynamicsCompressor();
-  comp.threshold.value = -20;
-  comp.knee.value = 24;
-  comp.ratio.value = 3.5;
-  comp.attack.value = 0.006;
-  comp.release.value = 0.25;
+  // ---- master chain: HPF → dry/wet reverb → compressor → soft limiter → air shelf → out
+  // Aimed at a produced, radio-ready feel without external samples.
 
-  const out = ctx.createGain();
-  out.gain.value = 0.9;
+  // Cut sub-rumble so the mix stays clean when bass + kick land together.
+  const hpf = ctx.createBiquadFilter();
+  hpf.type = "highpass";
+  hpf.frequency.value = 35;
+  hpf.Q.value = 0.7;
 
   const dry = ctx.createGain();
   dry.gain.value = 1;
   const send = ctx.createGain();
-  send.gain.value = 0.3;
+  send.gain.value = 0.28; // controlled room send
   const verb = ctx.createConvolver();
   verb.buffer = reverbImpulse(ctx);
 
   const wet = ctx.createGain();
   wet.gain.value = 1;
 
-  input.connect(dry).connect(comp);
-  input.connect(send).connect(verb).connect(comp);
+  // Music-oriented compressor (glues the band without squashing the piano).
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -18;
+  comp.knee.value = 18;
+  comp.ratio.value = 3.2;
+  comp.attack.value = 0.008;
+  comp.release.value = 0.22;
+
+  // Soft limiter (tanh) so peaks from stacked instruments never clip the output.
+  const limiter = ctx.createWaveShaper();
+  {
+    const curve = new Float32Array(1024);
+    for (let i = 0; i < 1024; i++) {
+      const x = i / 512 - 1;
+      // gentle soft-knee: linear in the centre, smooth roll-off at the edges
+      curve[i] = Math.tanh(x * 1.35) * 0.97;
+    }
+    limiter.curve = curve;
+    limiter.oversample = "2x";
+  }
+
+  // Presence / air so the mix feels open rather than boxed-in.
+  const air = ctx.createBiquadFilter();
+  air.type = "highshelf";
+  air.frequency.value = 7500;
+  air.gain.value = 1.6;
+
+  const out = ctx.createGain();
+  out.gain.value = 0.85; // headroom for the limiter
+
+  // Graph: input → HPF → (dry + reverb send) → comp → limiter → air → destination
+  input.connect(hpf);
+  hpf.connect(dry).connect(comp);
+  hpf.connect(send).connect(verb).connect(comp);
   wet.connect(verb);
-  comp.connect(out).connect(ctx.destination);
+  comp.connect(limiter).connect(air).connect(out).connect(ctx.destination);
 
   return {
     ctx,
@@ -568,7 +610,15 @@ export function melodyNote(
   env.gain.linearRampToValueAtTime(peak, when + atk);
   env.gain.setTargetAtTime(peak * 0.85, when + atk, 0.4);
   env.gain.setTargetAtTime(0, when + dur, relTau);
-  filter.connect(env).connect(s.input);
+
+  // Flute / warm sit a little to the right of the vocal so the stereo image
+  // of the band feels wider and less mono.
+  const pan = ctx.createStereoPanner();
+  pan.pan.value = sound === "flute" ? 0.28 : 0.12;
+  filter.connect(env).connect(pan).connect(s.input);
+  const send = ctx.createGain();
+  send.gain.value = sound === "flute" ? 0.22 : 0.12;
+  pan.connect(send).connect(s.wet);
 }
 
 /* --------------------------------- violin ---------------------------------- */
@@ -659,7 +709,16 @@ export function violinNote(
   n.start(when);
   n.stop(end);
 
-  filter.connect(hp).connect(env).connect(s.input);
+  // Place the solo violin slightly left of centre so it sits beside the vocal
+  // rather than on top of it.
+  const pan = ctx.createStereoPanner();
+  pan.pan.value = -0.22;
+
+  filter.connect(hp).connect(env).connect(pan).connect(s.input);
+  // A touch of extra reverb keeps the bow in the same room as the guitar.
+  const send = ctx.createGain();
+  send.gain.value = 0.18;
+  pan.connect(send).connect(s.wet);
 }
 
 /* ---------------------------- electric guitar ------------------------------ */
@@ -844,8 +903,8 @@ function guitarBus(s: Session): GainNode {
 }
 
 /** How loud one string is, and how much extra reverb the guitar gets. */
-const GUITAR_LEVEL = 0.05;
-const GUITAR_REVERB = 0.9;
+const GUITAR_LEVEL = 0.055;
+const GUITAR_REVERB = 0.75; // slightly drier so the master reverb does the room work
 
 /**
  * One string of a strummed acoustic guitar. Play 4-5 of these a few
