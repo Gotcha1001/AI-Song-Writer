@@ -15,11 +15,24 @@
 // in eighths, latin syncopates, country picks "boom-chick", ambient rolls slow
 // chords, jazz comps sparsely, and the flute / violin come in more or less.
 //
-// The plan is pure data (no audio), the same every time for the same song, and
-// the same section name gets the same arrangement (all Choruses match).
+// Song-shape awareness (so it sounds produced, not looped):
+//   - Repeats differ: every section gets an occurrence number in its seed, so
+//     Verse 2 is not a copy of Verse 1 (extra up-strokes, different answers).
+//   - The LAST chorus (when there are two or more) gets a lift: louder, busier
+//     strums, the violin always plays, and the flute sings higher.
+//   - The flute echoes the vocal hook (a diatonic third above, or inverted)
+//     in choruses instead of a generic fill.
+//   - The violin plays a moving line in choruses (chord tones joined by passing
+//     and approach notes) instead of one held note.
+//   - The last bar of a section gets a drum-less "fill" into the next one
+//     (a build into a chorus, lighter into anything else).
+//   - Intros start soft and grow, outros fade and the final chord rolls out.
+//
+// The plan is pure data (no audio) and the same every time for the same song.
 // Time is measured in sixteenth notes, like lib/melody.ts.
 import { chordTones } from "@/lib/music";
 import {
+  beatUnits,
   degreeToMidi,
   unitsPerBar,
   type KeySpec,
@@ -103,12 +116,22 @@ function sectionKind(name: string): Kind {
 interface BarInfo {
   kind: Kind;
   name: string;
+  /** How many sections of the same kind came before this one (Verse 2 -> 1). */
+  occ: number;
   /** Bar number inside its section, and the section's length in bars. */
   pos: number;
   len: number;
   /** Chords with the sixteenth they start on (same split the player uses). */
   starts: { u: number; chord: string }[];
   last: boolean;
+  intro: boolean;
+  outro: boolean;
+  /** The final chorus of a song that has several: it gets a lift. */
+  lift: boolean;
+  /** On the last bar of a section that is followed by another: the kind that follows. */
+  toNext: Kind | null;
+  /** Loudness scale: intro grows, outro fades, pre-chorus builds, last chorus is bigger. */
+  gain: number;
 }
 
 function buildInfo(
@@ -118,8 +141,23 @@ function buildInfo(
 ): BarInfo[] {
   const pulse = U / beatsPerBar;
   const out: BarInfo[] = [];
-  for (const section of sections) {
-    const kind = sectionKind(section.name);
+  const kinds = sections.map((s) => sectionKind(s.name));
+  const totals = new Map<Kind, number>();
+  for (const k of kinds) totals.set(k, (totals.get(k) ?? 0) + 1);
+  const seen = new Map<Kind, number>();
+
+  sections.forEach((section, si) => {
+    const kind = kinds[si];
+    const occ = seen.get(kind) ?? 0;
+    seen.set(kind, occ + 1);
+    const lift =
+      kind === "chorus" && occ >= 1 && occ === (totals.get(kind) ?? 1) - 1;
+    const intro = /intro/i.test(section.name);
+    const outro = /outro|ending|coda/i.test(section.name);
+    const preChorus = /pre[-\s]?chorus/i.test(section.name);
+    const nextKind = si + 1 < sections.length ? kinds[si + 1] : null;
+    const len = section.bars.length;
+
     section.bars.forEach((bar, pos) => {
       const segs = bar.segments;
       const starts: { u: number; chord: string }[] = [];
@@ -128,17 +166,33 @@ function buildInfo(
         const beat = Math.floor((i * beatsPerBar) / segs.length);
         starts.push({ u: beat * pulse, chord: seg.chord });
       });
+      const t = len > 1 ? pos / (len - 1) : 1; // 0 -> 1 through the section
+      let gain = 1;
+      if (intro) gain = 0.8 + 0.2 * t;
+      else if (outro) gain = 1 - 0.4 * (len > 1 ? t : 0);
+      else if (preChorus) gain = 0.9 + 0.1 * t;
+      else if (lift) gain = 1.08;
       out.push({
         kind,
         name: section.name.toLowerCase().replace(/[^a-z0-9]+/g, ""),
+        occ,
         pos,
-        len: section.bars.length,
+        len,
         starts,
         last: false,
+        intro,
+        outro,
+        lift,
+        toNext: pos === len - 1 ? nextKind : null,
+        gain,
       });
     });
+  });
+  if (out.length) {
+    const end = out[out.length - 1];
+    end.last = true;
+    end.gain = 1; // the last chord rings at full strength
   }
-  if (out.length) out[out.length - 1].last = true;
   return out;
 }
 
@@ -411,12 +465,60 @@ function planGuitar(
     if (!cache.has(c)) cache.set(c, guitarVoicing(c));
     return cache.get(c) ?? null;
   };
+  const pulse = U / beatsPerBar;
+  const beat = beatUnits(beatsPerBar);
+  const groups = Math.max(1, Math.round(U / beat));
+  // jazz / country comp on the top strings only, everything else on all of them
+  const thin: Hit["part"] = family === "jazz" ? "top" : undefined;
 
   return info.map((b) => {
-    const rand = rng(hash(`g|${b.name}|${b.pos}`));
-    const hits: Hit[] = b.last
-      ? [D(0, 1)] // one big final strum that rings out
-      : table[b.kind].map((h) => ({ ...h }));
+    const rand = rng(hash(`g|${b.name}|${b.occ}|${b.pos}`));
+    let hits: Hit[];
+
+    if (b.last) {
+      // one big final strum, rolled slowly so it rings out
+      hits = [{ u: 0, dir: "down", vel: 1, spread: 2 }];
+    } else if (b.intro && b.pos === 0) {
+      // the song opens with a single soft, rolled chord
+      hits = [{ u: 0, dir: "down", vel: 0.65, spread: 2 }];
+    } else {
+      hits = table[b.kind].map((h) => ({ ...h }));
+
+      // repeats differ: later verses pick up a few extra up-strokes
+      if (b.kind === "verse" && b.occ >= 1 && family !== "ambient") {
+        const chance = 0.45 * Math.min(b.occ, 2);
+        for (let k = 0; k < beatsPerBar; k++) {
+          const u = Math.round(k * pulse + pulse / 2);
+          if (u < U && !hits.some((h) => h.u === u) && rand() < chance) {
+            hits.push(Up(u, 0.4, thin));
+          }
+        }
+      }
+
+      // the last chorus lifts: fill in the off-beats
+      if (b.lift && family !== "ambient") {
+        for (let k = 0; k < beatsPerBar; k++) {
+          const u = Math.round(k * pulse + pulse / 2);
+          if (u < U && !hits.some((h) => h.u === u) && rand() < 0.7) {
+            hits.push(Up(u, 0.5, thin));
+          }
+        }
+      }
+
+      // transition fill: the last bar of a section pushes into the next one
+      if (b.toNext && family !== "ambient") {
+        const build = b.toNext === "chorus";
+        const from = Math.max(0, groups - 2);
+        hits = hits.filter((h) => h.u < from * beat);
+        for (let k = from; k < groups; k++) {
+          hits.push(D(k * beat, build ? 0.8 + 0.08 * (k - from) : 0.72, thin));
+          hits.push(
+            Up(k * beat + Math.round(beat / 2), build ? 0.55 : 0.4, thin),
+          );
+        }
+        if (build) hits.push(Up(U - 1, 0.7, thin)); // the push into the downbeat
+      }
+    }
 
     // a chord change always gets a down-stroke of its own
     if (!b.last) {
@@ -443,7 +545,7 @@ function planGuitar(
         d: b.last ? U + 8 : clamp(next - h.u, 2, 8),
         shift: i === 0 ? 0 : rand() * 0.12,
         notes,
-        vel: clamp(h.vel * (0.94 + rand() * 0.12), 0.1, 1),
+        vel: clamp(h.vel * b.gain * (0.94 + rand() * 0.12), 0.1, 1),
         dir: h.dir,
         spread: h.spread ?? 1,
       });
@@ -531,8 +633,11 @@ function planFill(opts: {
   dir: 1 | -1;
   rand: () => number;
   calm: boolean;
+  lo: number;
+  hi: number;
 }): NoteEvent[] {
-  const { gapStart, gapLen, chordAtU, ladder, rand } = opts;
+  const { gapStart, gapLen, chordAtU, rand, lo, hi } = opts;
+  const ladder = opts.ladder.filter((m) => m >= lo && m <= hi);
   let dir = opts.dir;
   const lead = gapLen >= 6 ? 2 : 0; // a breath before the flute speaks
   const avail = gapLen - lead;
@@ -545,7 +650,7 @@ function planFill(opts: {
 
   durs.forEach((d, i) => {
     const chord = chordAtU(u);
-    const cands = chordToneMidis(chord, FLUTE_LO, FLUTE_HI);
+    const cands = chordToneMidis(chord, lo, hi);
     const strong = i === 0 || i === durs.length - 1;
     let m: number | null = null;
 
@@ -602,6 +707,82 @@ function planFill(opts: {
   return events;
 }
 
+/**
+ * The flute answers the vocal hook: it repeats the last few sung notes a
+ * diatonic third above (or turned upside down), squeezed into the rest. Notes
+ * that would rub against the chord are moved to the nearest chord tone, and if
+ * nothing usable is left the caller falls back to a generic fill.
+ */
+function planEcho(opts: {
+  gapStart: number;
+  gapLen: number;
+  motif: { midi: number; d: number }[];
+  chordAtU: (u: number) => string | null;
+  ladder: number[];
+  lo: number;
+  hi: number;
+  invert: boolean;
+  rand: () => number;
+}): NoteEvent[] {
+  const { gapStart, gapLen, motif, chordAtU, lo, hi, rand } = opts;
+  const ladder = opts.ladder.filter((m) => m >= lo && m <= hi);
+  const lead = gapLen >= 6 ? 2 : 0;
+  const avail = gapLen - lead;
+  if (avail < 4 || motif.length < 2 || ladder.length < 5) return [];
+
+  // the tail of the hook that fits the rest
+  let take = motif.slice(-3);
+  let total = take.reduce((n, x) => n + x.d, 0);
+  while (take.length > 2 && total > avail) {
+    total -= take[0].d;
+    take = take.slice(1);
+  }
+  const scale = total > avail ? avail / total : 1;
+
+  const idxOf = (m: number) => {
+    let x = m;
+    while (x < lo) x += 12;
+    while (x > hi) x -= 12;
+    let best = 0;
+    for (let k = 1; k < ladder.length; k++) {
+      if (Math.abs(ladder[k] - x) < Math.abs(ladder[best] - x)) best = k;
+    }
+    return best;
+  };
+  const idx = take.map((n) => idxOf(n.midi));
+  const a0 = idx[0];
+  const mapped = idx.map((i) =>
+    clamp(opts.invert ? a0 + 2 - (i - a0) : i + 2, 0, ladder.length - 1),
+  );
+
+  const events: NoteEvent[] = [];
+  let u = gapStart + lead;
+  const end = gapStart + gapLen;
+  for (let i = 0; i < take.length; i++) {
+    const room = end - u;
+    if (room < 2) break;
+    let d = Math.max(2, Math.round(take[i].d * scale));
+    if (i === take.length - 1) d += Math.min(Math.max(0, end - u - d), 6);
+    d = Math.min(d, room);
+
+    let m = ladder[mapped[i]];
+    const chord = chordAtU(u);
+    if ((d >= 3 || u % 4 === 0) && clashesWithChord(m, chord)) {
+      const cands = chordToneMidis(chord, lo, hi);
+      if (!cands.length) return [];
+      m = nearest(cands, m, null, rand) ?? m;
+    }
+    events.push({
+      u,
+      d,
+      midi: m,
+      vel: clamp(0.58 + (rand() - 0.5) * 0.1 + (i === 1 ? 0.04 : 0), 0.4, 0.75),
+    });
+    u += d;
+  }
+  return events.length >= 2 ? events : [];
+}
+
 function planFlute(
   info: BarInfo[],
   melody: Melody | null,
@@ -609,13 +790,14 @@ function planFlute(
   family: ArrangementFamily,
 ): NoteEvent[][] {
   const out: NoteEvent[][] = info.map(() => []);
-  const ladder = melody ? diatonic(melody.key, FLUTE_LO, FLUTE_HI) : [];
+  // diatonic notes up to a third above the normal top note (the lift reaches there)
+  const ladder = melody ? diatonic(melody.key, FLUTE_LO, FLUTE_HI + 4) : [];
   let fluteLast: number | null = null;
   let prevFilled = -9;
-  const heard: number[] = []; // the last few sung pitches, in order
+  const heard: { midi: number; d: number }[] = []; // the last few sung notes, in order
 
   info.forEach((b, bi) => {
-    const rand = rng(hash(`f|${b.name}|${b.pos}`));
+    const rand = rng(hash(`f|${b.name}|${b.occ}|${b.pos}`));
     const sung = (melody?.bars[bi]?.notes ?? []).filter((n) => n.deg !== null);
 
     // which sixteenths does the vocal fill?
@@ -647,40 +829,73 @@ function planFlute(
       0.95,
       FLUTE_ANSWERS[b.kind][b.pos % 4] * FLUTE_GAIN[family],
     );
+    if (b.lift) p = Math.min(0.95, p * 1.35); // the last chorus is busier
+    if (b.toNext) p = Math.max(p, 0.7); // a little run into the next section
+    if (b.outro && b.pos === b.len - 2) p = Math.max(p, 0.8); // a last answer
     if (instrumental) p = Math.max(p, 0.85);
-    if (bi - prevFilled === 1 && !instrumental) p *= 0.35; // not two bars in a row
+    if (bi - prevFilled === 1 && !instrumental && !b.toNext) p *= 0.35; // not two bars in a row
     if (b.last) p = 0; // the song ends on held chords
     const roll = rand();
 
     if (gap && roll < p && melody) {
       // what was the vocal doing just before the gap?
-      const before = sung.filter((n) => n.u < gap.s);
-      const pitches = [...heard];
-      for (const n of before) {
-        pitches.push(degreeToMidi(melody.key, n.deg as number));
+      const motif = [...heard];
+      for (const n of sung.filter((x) => x.u < gap.s)) {
+        motif.push({ midi: degreeToMidi(melody.key, n.deg as number), d: n.d });
       }
-      const lastV = pitches[pitches.length - 1];
-      const prevV = pitches[pitches.length - 2];
+      const lastV = motif[motif.length - 1]?.midi;
+      const prevV = motif[motif.length - 2]?.midi;
+      const lo = FLUTE_LO;
+      const hi = b.lift ? FLUTE_HI + 4 : FLUTE_HI;
       let start = intoFluteRange(lastV ?? 72);
       if (fluteLast !== null && Math.abs(fluteLast - start) <= 7)
         start = fluteLast;
-      // answer the vocal in the opposite direction (contrary motion)
+      if (b.lift) start = Math.min(hi, start + 5);
+      // answer the vocal in the opposite direction (contrary motion);
+      // a run into a chorus always climbs
       const vocalDir =
         lastV !== undefined && prevV !== undefined
           ? Math.sign(lastV - prevV)
           : 0;
-      const dir: 1 | -1 = vocalDir > 0 ? -1 : 1;
+      const dir: 1 | -1 = b.toNext === "chorus" || vocalDir <= 0 ? 1 : -1;
+      const chordAtU = (u: number) => chordAt(b.starts, u);
 
-      const events = planFill({
-        gapStart: gap.s,
-        gapLen: gap.len,
-        chordAtU: (u) => chordAt(b.starts, u),
-        ladder,
-        start,
-        dir,
-        rand,
-        calm: family === "ambient",
-      });
+      // choruses echo the hook; other sections do it now and then
+      const echoP =
+        b.kind === "chorus" ? 0.75 : b.kind === "bridge" ? 0.4 : 0.3;
+      let events: NoteEvent[] = [];
+      if (motif.length >= 2 && rand() < echoP) {
+        events = planEcho({
+          gapStart: gap.s,
+          gapLen: gap.len,
+          motif,
+          chordAtU,
+          ladder,
+          lo,
+          hi,
+          // the first time a chorus returns it is a plain echo, then it turns over
+          invert: b.occ % 2 === 1 ? rand() < 0.7 : rand() < 0.25,
+          rand,
+        });
+      }
+      if (!events.length) {
+        events = planFill({
+          gapStart: gap.s,
+          gapLen: gap.len,
+          chordAtU,
+          ladder,
+          start,
+          dir,
+          rand,
+          calm: family === "ambient",
+          lo,
+          hi,
+        });
+      }
+      events = events.map((e) => ({
+        ...e,
+        vel: clamp(e.vel * b.gain, 0.2, 0.85),
+      }));
       if (events.length) {
         out[bi] = events;
         prevFilled = bi;
@@ -688,8 +903,9 @@ function planFlute(
       }
     }
 
-    for (const n of sung)
-      heard.push(degreeToMidi(melody!.key, n.deg as number));
+    for (const n of sung) {
+      heard.push({ midi: degreeToMidi(melody!.key, n.deg as number), d: n.d });
+    }
     if (heard.length > 4) heard.splice(0, heard.length - 4);
   });
   return out;
@@ -726,6 +942,7 @@ function planViolin(
   flute: NoteEvent[][],
   U: number,
   family: ArrangementFamily,
+  key: KeySpec | null,
 ): NoteEvent[][] {
   const out: NoteEvent[][] = info.map(() => []);
 
@@ -743,6 +960,57 @@ function planViolin(
     const c = ic(m, o);
     return c === 0 ? 3 : c === 1 ? 6 : c === 2 ? 1.5 : c === 6 ? 1.5 : 0;
   };
+  /** Stay under the vocal and out of the flute's way. */
+  const penalty = (m: number, vs: Span[], fs: Span[]) => {
+    let worst = 0;
+    for (const v of vs) {
+      const above = m >= v.midi - 2 ? 2.5 + Math.max(0, m - v.midi) * 0.08 : 0;
+      worst = Math.max(worst, clash(m, v.midi) + above);
+    }
+    let fw = 0;
+    for (const f of fs) fw = Math.max(fw, clash(m, f.midi));
+    return worst + fw;
+  };
+
+  /** The best chord tone for a spot: the third first, the root last, close to `prev`. */
+  const bestTone = (
+    chord: string,
+    vs: Span[],
+    fs: Span[],
+    prev: number | null,
+  ): number | null => {
+    const t = chordTones(chord);
+    if (!t) return null;
+    let best: number | null = null;
+    let bestScore = Infinity;
+    for (let m = VIOLIN_LO; m <= VIOLIN_HI; m++) {
+      const idx = t.pcs.indexOf(mod(m, 12));
+      if (idx < 0) continue;
+      // third first, then the colour notes, then the fifth, the root last
+      let score = idx === 0 ? 4 : idx === 1 ? 0 : idx === 2 ? 1.2 : 0.4;
+      score +=
+        prev === null ? Math.abs(m - 67) * 0.2 : Math.abs(m - prev) * 0.35;
+      score += Math.abs(m - 67) * 0.05;
+      score += penalty(m, vs, fs);
+      if (score < bestScore) {
+        bestScore = score;
+        best = m;
+      }
+    }
+    return best;
+  };
+
+  const ladder = key ? diatonic(key, VIOLIN_LO, VIOLIN_HI) : [];
+  /** The scale note `steps` places above (or below) `m`, or null off the ends. */
+  const stepFrom = (m: number, steps: number): number | null => {
+    if (!ladder.length) return null;
+    let idx = 0;
+    for (let k = 1; k < ladder.length; k++) {
+      if (Math.abs(ladder[k] - m) < Math.abs(ladder[idx] - m)) idx = k;
+    }
+    const ni = idx + steps;
+    return ni < 0 || ni >= ladder.length ? null : ladder[ni];
+  };
 
   const P: Record<Kind, number> = {
     verse: 0.35,
@@ -759,17 +1027,22 @@ function planViolin(
     if (
       info[bi + 1] &&
       info[bi + 1].name === b.name &&
+      info[bi + 1].occ === b.occ &&
       info[bi + 1].pos === b.pos + 1
     ) {
       block.push(bi + 1);
     }
 
     const lastBlock = b.pos + 2 >= b.len;
+    const endsSong = block.some((j) => info[j].last);
     let p = Math.min(0.95, P[b.kind] * VIOLIN_GAIN[family]);
     if (b.pos === 0 && b.kind !== "chorus") p *= 0.3; // let the vocal come in clean
     if (lastBlock && b.kind === "verse") p = 0.65; // a verse builds into the chorus
-    if (block.some((j) => info[j].last)) p = 0.9; // swell to the end
-    const rand = rng(hash(`v|${b.name}|${b.pos / 2}`));
+    if (b.intro) p = lastBlock ? 0.7 : 0.2; // strings join the intro late
+    if (b.outro) p = 0.9; // and sing the song out
+    if (b.lift) p = 0.95; // the last chorus always has strings
+    if (endsSong) p = 0.9; // swell to the end
+    const rand = rng(hash(`v|${b.name}|${b.occ}|${b.pos / 2}`));
     if (rand() >= p) continue;
 
     // chord runs across the block (a held chord is one long note)
@@ -784,59 +1057,123 @@ function planViolin(
       (e, i) => i === 0 || e.chord !== entries[i - 1].chord,
     );
     const blockEnd = (block[block.length - 1] + 1) * U;
+    const afterChord =
+      info[block[block.length - 1] + 1]?.starts[0]?.chord ?? null;
+
+    // choruses move; everything else holds. Ambient moves slowly, the lift quickly.
+    const moves = b.kind === "chorus" && ladder.length > 0 && !endsSong;
+    const seg =
+      family === "ambient"
+        ? U
+        : b.lift
+          ? Math.max(4, Math.round(U / 4))
+          : Math.round(U / 2);
+
+    const velFor = (vs: Span[], s: number, e: number, soft = 0) => {
+      let sungUnits = 0;
+      for (const v of vs) sungUnits += Math.min(v.e, e) - Math.max(v.s, s);
+      const sungFrac = sungUnits / (e - s);
+      return clamp(
+        ((sungFrac > 0.5 ? 0.34 : 0.46) +
+          (b.kind === "chorus" ? 0.04 : 0) +
+          VIOLIN_VEL[family] -
+          soft) *
+          b.gain,
+        0.15,
+        0.8,
+      );
+    };
+    const push = (s: number, d: number, midi: number, vel: number) => {
+      out[Math.floor(s / U)].push({ u: s % U, d, midi, vel });
+    };
 
     merged.forEach((run, k) => {
       const start = run.abs;
       const end = merged[k + 1]?.abs ?? blockEnd;
       if (end - start < 4) return;
-      const t = chordTones(run.chord);
-      if (!t) return;
+      const nextChord = merged[k + 1]?.chord ?? afterChord;
 
-      const vs = overlapping(vocal, start, end);
-      const fs = overlapping(fluteSpans, start, end);
+      if (!moves || end - start < Math.round(U / 2)) {
+        // held pad: one chord tone for the whole run
+        const vs = overlapping(vocal, start, end);
+        const fs = overlapping(fluteSpans, start, end);
+        const best = bestTone(run.chord, vs, fs, last);
+        if (best === null) return;
+        last = best;
+        push(start, end - start, best, velFor(vs, start, end));
+        return;
+      }
 
-      let best: number | null = null;
-      let bestScore = Infinity;
-      for (let m = VIOLIN_LO; m <= VIOLIN_HI; m++) {
-        const idx = t.pcs.indexOf(mod(m, 12));
-        if (idx < 0) continue;
-        // third first, then the colour notes, then the fifth, the root last
-        let score = idx === 0 ? 4 : idx === 1 ? 0 : idx === 2 ? 1.2 : 0.4;
-        score +=
-          last === null ? Math.abs(m - 67) * 0.2 : Math.abs(m - last) * 0.35;
-        score += Math.abs(m - 67) * 0.05;
-        // stay under the vocal and out of its way
-        let worst = 0;
-        for (const v of vs) {
-          const above =
-            m >= v.midi - 2 ? 2.5 + Math.max(0, m - v.midi) * 0.08 : 0;
-          worst = Math.max(worst, clash(m, v.midi) + above);
-        }
-        score += worst;
-        let fw = 0;
-        for (const f of fs) fw = Math.max(fw, clash(m, f.midi));
-        score += fw;
-        if (score < bestScore) {
-          bestScore = score;
-          best = m;
+      // moving line: a chord tone, a passing note, a chord tone ... then a
+      // stepwise approach into the next chord
+      const pieces: { s: number; e: number }[] = [];
+      for (let s = start; s < end; s += seg) {
+        pieces.push({ s, e: Math.min(end, s + seg) });
+      }
+      if (pieces.length > 1) {
+        const tail = pieces[pieces.length - 1];
+        if (tail.e - tail.s < 4) {
+          pieces.pop();
+          pieces[pieces.length - 1].e = tail.e;
         }
       }
-      if (best === null) return;
-      last = best;
+      let dir = 1;
+      pieces.forEach((pc, j) => {
+        const vs = overlapping(vocal, pc.s, pc.e);
+        const fs = overlapping(fluteSpans, pc.s, pc.e);
+        const prev = last;
+        let m: number | null = null;
+        let passing = false;
 
-      // quieter while the vocal is singing, a little more when it rests
-      let sungUnits = 0;
-      for (const v of vs)
-        sungUnits += Math.min(v.e, end) - Math.max(v.s, start);
-      const sungFrac = sungUnits / (end - start);
-      out[Math.floor(start / U)].push({
-        u: start % U,
-        d: end - start,
-        midi: best,
-        vel:
-          (sungFrac > 0.5 ? 0.34 : 0.46) +
-          (b.kind === "chorus" ? 0.04 : 0) +
-          VIOLIN_VEL[family],
+        if (j > 0 && prev !== null) {
+          if (j === pieces.length - 1 && nextChord) {
+            const target = chordToneMidis(nextChord, VIOLIN_LO, VIOLIN_HI).sort(
+              (x, y) => Math.abs(x - prev) - Math.abs(y - prev),
+            )[0];
+            if (target !== undefined) {
+              // step in from the side we are on; if that is where we already
+              // are (no movement), come in from the other side instead
+              const sides = prev > target ? [1, -1] : [-1, 1];
+              for (const side of sides) {
+                const c = stepFrom(target, side);
+                if (c !== null && c !== prev && penalty(c, vs, fs) < 3) {
+                  m = c;
+                  break;
+                }
+              }
+            }
+          } else if (j % 2 === 1) {
+            const cands = [
+              stepFrom(prev, dir),
+              stepFrom(prev, -dir),
+              stepFrom(prev, 2 * dir),
+            ].filter((x): x is number => x !== null && x !== prev);
+            let bestScore = Infinity;
+            for (const c of cands) {
+              const sc =
+                penalty(c, vs, fs) +
+                (clashesWithChord(c, run.chord) ? 1.5 : 0) +
+                (Math.sign(c - prev) === dir ? 0 : 0.6);
+              if (sc < bestScore) {
+                bestScore = sc;
+                m = c;
+              }
+            }
+          }
+          // a passing or approach note must not rub the vocal or the flute
+          if (m !== null) {
+            if (penalty(m, vs, fs) >= 3) m = null;
+            else passing = true;
+          }
+        }
+        if (m === null) m = bestTone(run.chord, vs, fs, prev);
+        if (m === null) return;
+
+        if (prev !== null && m !== prev) dir = m > prev ? 1 : -1;
+        if (m >= VIOLIN_HI - 3) dir = -1;
+        if (m <= VIOLIN_LO + 3) dir = 1;
+        last = m;
+        push(pc.s, pc.e - pc.s, m, velFor(vs, pc.s, pc.e, passing ? 0.03 : 0));
       });
     });
   }
@@ -857,7 +1194,7 @@ export function arrangeSong(
   const vocal = vocalSpans(melody, info.length, U);
   const guitar = planGuitar(info, U, beatsPerBar, family);
   const flute = planFlute(info, melody, U, family);
-  const violin = planViolin(info, vocal, flute, U, family);
+  const violin = planViolin(info, vocal, flute, U, family, melody?.key ?? null);
   return { unitsPerBar: U, guitar, flute, violin };
 }
 
